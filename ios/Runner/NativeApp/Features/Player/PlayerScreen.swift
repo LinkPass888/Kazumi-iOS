@@ -2451,22 +2451,16 @@ struct PlayerScreen: View {
         sleepTimerChosenMinutes = nil
     }
 
-    /// 远程投屏：把系统那粒 AirPlay 按钮摆出来，点它选设备。
+    /// 远程投屏：AirPlay / DLNA 二选一，版面见 `CastSheet`（design-cast.md）。
     private var airPlaySheet: some View {
-        VStack(spacing: 16) {
-            Text("远程投屏")
-                .font(.headline)
-            Text("选一台支持隔空播放的设备，画面会转到那台电视上。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            AirPlayRoutePicker()
-                .frame(width: 44, height: 44)
-            Button("完成") { activeSheet = nil }
-                .buttonStyle(.borderedProminent)
-        }
-        .padding(24)
-        .presentationDetents([.height(240)])
+        CastSheet(
+            mediaURL: controllerURLString,
+            onPlay: { surface.play() },
+            onPause: { surface.pause() },
+            onSeek: { surface.seek(to: $0) },
+            position: surface.currentTime,
+            duration: surface.duration
+        )
     }
 
     /// 外部播放：把这一集的地址交给系统分享面板，装了 VLC、Infuse 这类播放器就能在那里打开。
@@ -4749,18 +4743,6 @@ private struct PlayerBoxModifier: ViewModifier {
             .aspectRatio(aspectRatio, contentMode: .fit)
             .frame(maxWidth: .infinity, maxHeight: fillsWindow ? .infinity : nil)
     }
-}
-
-/// 系统那粒隔空播放按钮，塞进投屏浮层里用。
-private struct AirPlayRoutePicker: UIViewRepresentable {
-    func makeUIView(context: Context) -> AVRoutePickerView {
-        let view = AVRoutePickerView()
-        view.prioritizesVideoDevices = true
-        view.tintColor = .white
-        return view
-    }
-
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 
 /// 系统分享面板：把媒体地址交给别的 App（VLC、Infuse 之类）打开。
