@@ -78,7 +78,7 @@ final class DLNABrowser {
     private var searchTask: Task<Void, Never>?
 
     func start() {
-        guard state != .searching else { return }
+        if case .searching = state { return }
         state = .searching
         progressText = nil
         searchTask = Task { [weak self] in
