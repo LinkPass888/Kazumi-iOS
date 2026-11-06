@@ -59,7 +59,11 @@ struct PluginShopView: View {
                         }
                     }
                 } footer: {
-                    Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则，数据来自 KazumiRules 仓库。"))
+                    if KazumiEndpoints.customPluginShop == nil {
+                        Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则，数据来自 KazumiRules 仓库。"))
+                    } else {
+                        Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则。"))
+                    }
                 }
             }
         }

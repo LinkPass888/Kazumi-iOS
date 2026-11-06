@@ -6168,7 +6168,7 @@
         "zh-Hant":{
           "stringUnit":{
             "state":"translated",
-            "value":"遠端投放時無法使用"
+            "value":"遠端播放時無法使用"
           }
         }
       }
@@ -12750,7 +12750,7 @@
         "zh-Hant":{
           "stringUnit":{
             "state":"translated",
-            "value":"遠端投放"
+            "value":"遠端播放"
           }
         }
       }
@@ -14086,6 +14086,126 @@
           "stringUnit":{
             "state":"translated",
             "value":"回復後請檢查追番同步、多裝置同步和自訂彈幕介面的憑證。"
+          }
+        }
+      }
+    },
+    "自定义规则仓库":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"自訂規則倉庫"
+          }
+        }
+      }
+    },
+    "仓库地址":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"倉庫位址"
+          }
+        }
+      }
+    },
+    "填仓库的 index.json 地址，例如 https://…/index.json":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"填寫倉庫的 index.json 位址，例如 https://…/index.json"
+          }
+        }
+      }
+    },
+    "保存后，规则浏览、安装和更新都从这个仓库取。":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"儲存後，規則瀏覽、安裝和更新都從這個倉庫取得。"
+          }
+        }
+      }
+    },
+    "当前使用官方仓库（KazumiRules）":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"目前使用官方倉庫（KazumiRules）"
+          }
+        }
+      }
+    },
+    "官方仓库加速只作用于官方地址，你填的地址原样请求。":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"官方倉庫加速只作用於官方位址，你填寫的位址原樣請求。"
+          }
+        }
+      }
+    },
+    "只添加你信任的仓库。第三方规则会访问它自己声明的网站和接口。":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"只新增你信任的倉庫。第三方規則會連到它自己聲明的網站和介面。"
+          }
+        }
+      }
+    },
+    "恢复官方仓库":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"回復官方倉庫"
+          }
+        }
+      }
+    },
+    "已切换到这个规则仓库":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"已切換到這個規則倉庫"
+          }
+        }
+      }
+    },
+    "仓库地址无效，请填完整的 http 或 https 地址":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"倉庫位址無效，請填寫完整的 http 或 https 位址"
+          }
+        }
+      }
+    },
+    "检查网络或地址后重试。":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"檢查網路或位址後重試。"
+          }
+        }
+      }
+    },
+    "检查地址是否正确，或换一个仓库。":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"檢查位址是否正確，或換一個倉庫。"
           }
         }
       }
