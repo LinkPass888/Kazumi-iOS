@@ -2223,8 +2223,9 @@ struct PlayerScreen: View {
 
     /// 顶栏的定时关闭（横竖屏都在这一组里）。
     ///
-    /// 实时 mm:ss 直接挂在这颗按钮下方的小胶囊上，不再塞进 UIMenu 的标题／副标题：
-    /// 菜单里的档位标题固定，签名就不会每秒变一次，子菜单也不会被系统收掉。
+    /// 计时仍按原来的方式放在菜单里：选中的那一档标题实时显示 mm:ss。
+    /// 定时关闭现在是顶层菜单，不再藏在「更多」的子菜单里，所以每秒更新
+    /// 不会再把用户刚展开的子菜单收掉。
     /// 没定时是空心月亮，倒数一开始换实心并按光学补偿缩一档。
     private var sleepTimerButton: some View {
         let isRunning = sleepTimerRemaining != nil
@@ -2250,18 +2251,6 @@ struct PlayerScreen: View {
                 symbolOptical: isRunning ? .solid : .standard,
                 onOpen: { pinControlsWhileMenuOpen() }
             )
-            .overlay(alignment: .bottom) {
-                if let value = sleepTimerValue {
-                    Text(value)
-                        .font(.system(size: 9, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(.black.opacity(0.55)))
-                        .offset(y: 4)
-                        .allowsHitTesting(false)
-                }
-            }
         }
     }
 
@@ -2410,21 +2399,18 @@ struct PlayerScreen: View {
         return true
     }
 
-    /// 正在倒数时顶栏那颗上显示的 mm:ss；没定就是 nil。
-    private var sleepTimerValue: String? {
-        guard let remaining = sleepTimerRemaining else { return nil }
-        return String(format: "%02d:%02d", remaining / 60, remaining % 60)
-    }
-
     /// 用户选的那一档（选中的勾看它，不跟着倒数变）。
     private var sleepTimerMinutes: Int? {
         sleepTimerChosenMinutes
     }
 
-    /// 菜单里的档位标题固定，不跟着秒数跳；实时倒数只在顶栏那颗上显示，
-    /// 这样 UIMenu 的签名不会每秒变一次，菜单也不会被系统收掉。
+    /// 档位保持固定；正在倒数的那一项标题实时显示 mm:ss（原来菜单里的计时）。
     private func sleepTimerItemTitle(_ minutes: Int) -> String {
-        String(localized: "\(String(describing: minutes)) 分钟")
+        if sleepTimerChosenMinutes == minutes,
+           let remaining = sleepTimerRemaining {
+            return String(format: "%02d:%02d", remaining / 60, remaining % 60)
+        }
+        return String(localized: "\(String(describing: minutes)) 分钟")
     }
 
     /// 到点暂停。定时器是一次性的 Task，改定或取消都要把上一个收掉。
@@ -2648,16 +2634,16 @@ struct PlayerScreen: View {
         return text
     }
 
-    /// 弹幕开关：白符号直接压画面，不套底；横竖屏都用统一的 40×40 热区。
+    /// 弹幕开关：关是 `text.bubble`，开是 `text.bubble.fill`；横竖屏都用统一的
+    /// 40×40 热区、18pt Medium，实心态按光学补偿缩一档。
     private var danmakuButton: some View {
         PlayerIconButton {
             noteInteraction()
             handleDanmakuButton()
         } content: {
-            // 跟弹幕设置同一套两条横线符号；开关用无齿轮版，设置用带齿轮版，
-            // 两个按钮挨着也分得清。开启时全白，关闭时压暗。
-            DanmakuSettingsGlyph(color: .white, showsGear: false)
-                .opacity(danmakuEnabled ? 1 : 0.45)
+            Image(systemName: danmakuEnabled ? "text.bubble.fill" : "text.bubble")
+                .playerIcon(optical: danmakuEnabled ? .solid : .standard)
+                .foregroundStyle(.white)
         }
         .accessibilityLabel(danmakuEnabled ? "关闭弹幕" : "打开弹幕")
     }
@@ -4805,8 +4791,6 @@ private struct SyncPlaySheet: View {
 struct DanmakuSettingsGlyph: View {
     /// 颜色由调用方定：播放器里白色，「更多」菜单渲成模板图后跟系统 tint。
     var color: Color = .white
-    /// 是否显示右下角齿轮；开关用无齿轮版，设置用完整形态。
-    var showsGear: Bool = true
 
     var body: some View {
         ZStack {
@@ -4825,25 +4809,21 @@ struct DanmakuSettingsGlyph: View {
                             .offset(x: 2)
                     }
                 }
-                .offset(x: showsGear ? -1 : 0, y: showsGear ? -1 : 0)
+                .offset(x: -1, y: -1)
                 .overlay(alignment: .bottomTrailing) {
-                    if showsGear {
-                        // 齿轮位置的镂空避让圆，避免框线和齿轮叠在一起。
-                        Circle()
-                            .frame(width: 9.5, height: 9.5)
-                            .offset(x: 1, y: 1)
-                            .blendMode(.destinationOut)
-                    }
+                    // 齿轮位置的镂空避让圆，避免框线和齿轮叠在一起。
+                    Circle()
+                        .frame(width: 9.5, height: 9.5)
+                        .offset(x: 1, y: 1)
+                        .blendMode(.destinationOut)
                 }
                 .compositingGroup()
 
-            if showsGear {
-                // 右下角小齿轮：8pt，精致但不抢主体。
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 8, weight: .bold))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .offset(x: 0.5, y: 0.5)
-            }
+            // 右下角小齿轮：8pt，精致但不抢主体。
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 8, weight: .bold))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .offset(x: 0.5, y: 0.5)
         }
         .foregroundStyle(color)
         // 严格锁死 20×18，绝不撑大外面的按钮。
