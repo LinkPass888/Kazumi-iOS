@@ -43,7 +43,7 @@ struct SystemMenuButton: UIViewRepresentable {
     var menuTint: Color = .primary
     var symbolSize: CGFloat = 18
     var symbolWeight: Font.Weight = .medium
-    /// 实心块状符号在 UIKit 侧没法用 scaleEffect，按 1.5pt 缩一档。
+    /// 实心块状符号在 UIKit 侧没法用 scaleEffect，按 0.9pt 轻微缩一档。
     var symbolOptical: PlayerIconOptical = .standard
     var onOpen: () -> Void = {}
     var capsule: Bool = false
@@ -134,7 +134,7 @@ struct SystemMenuButton: UIViewRepresentable {
         coordinator.onOpen = onOpen
 
         let tintColor = Self.uiColor(tint)
-        let effectiveSymbolSize = symbolSize - (symbolOptical == .solid ? 1.5 : 0)
+        let effectiveSymbolSize = symbolSize - (symbolOptical == .solid ? 0.9 : 0)
         let appearanceSignature = [
             title ?? "",
             symbol,
@@ -219,6 +219,8 @@ struct SystemMenuButton: UIViewRepresentable {
     private static func menuImage(_ item: Item) -> UIImage? {
         if let image = item.symbolImage { return image }
         guard !item.symbol.isEmpty else { return nil }
+        // 菜单里的图标统一 18pt Medium：同一张菜单里不再按 .fill 再缩，
+        // 否则心形/星星会比旁边的线性符号小一档。
         return UIImage(
             systemName: item.symbol,
             withConfiguration: UIImage.SymbolConfiguration(

@@ -2635,14 +2635,14 @@ struct PlayerScreen: View {
     }
 
     /// 弹幕开关：关是 `text.bubble`，开是 `text.bubble.fill`；横竖屏都用统一的
-    /// 40×40 热区、18pt Medium，实心态按光学补偿缩一档。
+    /// 40×40 热区、18pt Medium。开/关两态保持同一视觉尺寸，避免切换时跳一下。
     private var danmakuButton: some View {
         PlayerIconButton {
             noteInteraction()
             handleDanmakuButton()
         } content: {
             Image(systemName: danmakuEnabled ? "text.bubble.fill" : "text.bubble")
-                .playerIcon(optical: danmakuEnabled ? .solid : .standard)
+                .playerIcon()
                 .foregroundStyle(.white)
         }
         .accessibilityLabel(danmakuEnabled ? "关闭弹幕" : "打开弹幕")

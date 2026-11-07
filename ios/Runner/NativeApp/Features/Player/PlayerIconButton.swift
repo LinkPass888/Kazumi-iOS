@@ -12,7 +12,7 @@ import SwiftUI
 /// 光学补偿分类。
 /// - standard：线性 / 常规符号，18pt Medium 原样。
 /// - solid：实心块状符号，视觉重心偏大，缩一档。
-/// - detailed：细长、带角标或复合符号，视觉显小，微放一档。
+/// - detailed：细长、带角标或复合符号；保持 18pt 基准，不再额外放大。
 enum PlayerIconOptical: Equatable, Hashable {
     case standard
     case solid
@@ -29,8 +29,9 @@ struct PlayerIconModifier: ViewModifier {
     private var scale: CGFloat {
         switch optical {
         case .standard: 1
-        case .solid: 0.9
-        case .detailed: 1.05
+        // 只做很轻的补偿；0.9/1.05 放在一排里会明显一大一小。
+        case .solid: 0.95
+        case .detailed: 1
         }
     }
 
