@@ -4,14 +4,6 @@
 //
 //  DLNA 设备发现：**单播**探测，不用 SSDP 组播。
 //
-//  为什么不上组播：这是不上架的侧载应用，拿不到
-//  `com.apple.developer.networking.multicast` 签名能力。组播 M-SEARCH 发到
-//  239.255.255.250 需要那个能力，侧载账号批不下来。改成对本机 Wi-Fi 网段
-//  逐个发单播 M-SEARCH（UDP 到每个 IP:1900）＋常见端口的描述文件兜底，
-//  全是普通单播 HTTP/UDP，`NSAllowsLocalNetworking` 就够。
-//
-//  另外支持手动输入电视 IP 精准探测，网段扫不到时给一条明路。
-//
 
 import Foundation
 import Network
@@ -26,7 +18,6 @@ struct DLNADevice: Identifiable, Equatable, Sendable {
     let location: URL
     let controlURL: URL
 
-    /// 设备区那一行的副文：单播方案里 IP 比型号更有用（同一台可能多个端口）。
     var detail: String? { ip }
 }
 
@@ -54,8 +45,8 @@ final class DLNABrowser {
 
         var message: String {
             switch self {
-            case .notFound: String(localized: "确认电视和手机连的是同一个 Wi-Fi。也可以直接输入电视的 IP。")
-            case .permission: String(localized: "需要在设置里允许 Kazumi 访问本地网络，才能搜到电视。")
+            case .notFound: String(localized: "确认电视/电脑和手机连的是同一个 Wi-Fi。也可以直接输入 IP 或 IP:端口。")
+            case .permission: String(localized: "需要在设置里允许 Kazumi 访问本地网络，才能搜到设备。")
             }
         }
 
@@ -63,7 +54,7 @@ final class DLNABrowser {
         var allowsSettings: Bool { self == .permission }
     }
 
-    enum State {
+    enum State: Equatable {
         case idle
         case searching
         case found([DLNADevice])
@@ -71,14 +62,13 @@ final class DLNABrowser {
     }
 
     private(set) var state: State = .idle
-    /// 一轮扫描的进度提示（设备区搜索态那行字）。
     private(set) var progressText: String?
 
     private let prober = DLNAUnicastProber()
     private var searchTask: Task<Void, Never>?
 
     func start() {
-        if case .searching = state { return }
+        guard state != .searching else { return }
         state = .searching
         progressText = nil
         searchTask = Task { [weak self] in
@@ -98,24 +88,26 @@ final class DLNABrowser {
         progressText = nil
     }
 
-    /// 手动输入电视 IP，精准探测一次。命中就并进列表并置顶。
+    /// 手动输入电视/电脑 IP（支持 "192.168.1.10"、"192.168.1.10:端口" 或完整 "http://..." 链接）
     func probeIP(_ raw: String) async {
-        let ip = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !ip.isEmpty else { return }
+        let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
         state = .searching
-        progressText = String(localized: "正在连接 \(ip)…")
+        progressText = String(localized: "正在连接 \(input)…")
 
-        let device = await prober.probeSingleIP(ip)
+        let device = await prober.probeSingleInput(input)
         guard !Task.isCancelled else { return }
 
         guard let device else {
             state = .failed(.notFound)
+            progressText = nil
             return
         }
         var devices = currentDevices
         devices.removeAll { $0.id == device.id }
         devices.insert(device, at: 0)
         state = .found(devices)
+        progressText = nil
     }
 
     private var currentDevices: [DLNADevice] {
@@ -124,7 +116,8 @@ final class DLNABrowser {
     }
 
     private func runSearch() async {
-        guard await LocalNetworkPermission.probe() else {
+        // 仅当明确为策略拒绝(-65554)时才拦截，防止 Info.plist 漏配 Bonjour 导致误杀
+        if await LocalNetworkPermission.isExplicitlyDenied() {
             state = .failed(.permission)
             return
         }
@@ -174,38 +167,79 @@ final class DLNABrowser {
 
 // MARK: - 单播扫描引擎
 
-/// 纯网络层，actor 隔离，跑在后台；不碰任何 UI 状态。
 actor DLNAUnicastProber {
-    /// 单播 M-SEARCH 没回应时，直接试这些常见端口的描述文件。
-    /// 国产电视／盒子很多不回单播 M-SEARCH，但描述文件是标准 HTTP，能直接取。
+    /// 扩充 PC 接收端（Macast / MiniCast / Kodi / Windows 媒体流）与常见电视端口兜底
     private let fallbackTargets: [(port: Int, path: String)] = [
+        (1068, "/description.xml"), // Macast 默认
+        (8895, "/description.xml"), // MiniCast 常见
+        (8895, "/desc.xml"),
+        (6060, "/description.xml"),
+        (1400, "/description.xml"), // Kodi
         (49152, "/description.xml"),
         (49153, "/description.xml"),
         (49154, "/description.xml"),
         (49152, "/upnp/dev/render/desc.xml"),
-        (1400, "/description.xml"),
         (8200, "/rootDesc.xml"),
         (9080, "/description.xml"),
         (8060, "/dial/dd.xml"),
-        (1068, "/description.xml"),
+    ]
+
+    /// 常见描述文件后缀路径（用于用户输入 IP:端口 时遍历）
+    private let commonPaths = [
+        "/description.xml",
+        "/desc.xml",
+        "/rootDesc.xml",
+        "/upnp/dev/render/desc.xml",
+        "/dmr.xml",
+        "/"
     ]
 
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 1.2
-        config.timeoutIntervalForResource = 2.0
+        config.timeoutIntervalForRequest = 1.5
+        config.timeoutIntervalForResource = 2.5
         return URLSession(configuration: config)
     }()
 
-    func probeSingleIP(_ ip: String) async -> DLNADevice? {
-        if let location = await unicastMSearch(to: ip, timeout: 1.0),
+    /// 支持 3 种手动输入格式：完整 http URL、"IP:端口"、纯 "IP"
+    func probeSingleInput(_ rawInput: String) async -> DLNADevice? {
+        // 1. 完整 http://... 链接（如直接从 Macast 复制出来的链接）
+        if rawInput.lowercased().hasPrefix("http://") || rawInput.lowercased().hasPrefix("https://"),
+           let url = URL(string: rawInput),
+           let host = url.host {
+            if let device = await fetchDescription(from: url, ip: host) {
+                return device
+            }
+        }
+
+        // 2. "IP:端口" 格式（如 "192.168.31.88:54321"）
+        let clean = rawInput
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "https://", with: "")
+        let hostPort = clean.split(separator: "/").first.map(String.init) ?? clean
+        let parts = hostPort.split(separator: ":")
+
+        if parts.count == 2, let port = Int(parts[1]) {
+            let ip = String(parts[0])
+            for path in commonPaths {
+                if let url = URL(string: "http://\(ip):\(port)\(path)"),
+                   let device = await fetchDescription(from: url, ip: ip) {
+                    return device
+                }
+            }
+            return nil
+        }
+
+        // 3. 纯 IP 格式：先发多 ST 头的 UDP 1900 单播探测，再扫常见端口兜底
+        let ip = String(parts[0])
+        if let location = await unicastMSearch(to: ip, timeout: 1.2),
            let device = await fetchDescription(from: location, ip: ip) {
             return device
         }
         return await probeFallbackPorts(ip: ip)
     }
 
-    /// 扫整个 /24，分批并发，别一次开 254 条连接。
+    /// 扫整个 /24，分批并发
     func scanSubnet(prefix: String) async -> [DLNADevice] {
         let ips = (1...254).map { "\(prefix).\($0)" }
         let batchSize = 50
@@ -227,10 +261,8 @@ actor DLNAUnicastProber {
         return Array(found.values)
     }
 
-    /// 网段扫描只发单播 M-SEARCH，不做端口兜底（254 × 9 太吵）；
-    /// 兜底留给手填 IP 那条路。
     private func unicastOnly(ip: String) async -> DLNADevice? {
-        guard let location = await unicastMSearch(to: ip, timeout: 0.55) else { return nil }
+        guard let location = await unicastMSearch(to: ip, timeout: 0.65) else { return nil }
         return await fetchDescription(from: location, ip: ip)
     }
 
@@ -254,46 +286,56 @@ actor DLNAUnicastProber {
         }
     }
 
-    // MARK: 单播 M-SEARCH
+    // MARK: 单播 M-SEARCH（多 ST 头连发 + 持续收包过滤）
 
     private func unicastMSearch(to ip: String, timeout: TimeInterval) async -> URL? {
         let host = NWEndpoint.Host(ip)
         let port = NWEndpoint.Port(integerLiteral: 1900)
         let connection = NWConnection(host: host, port: port, using: .udp)
 
-        let payload = "M-SEARCH * HTTP/1.1\r\n"
-            + "HOST: 239.255.255.250:1900\r\n"
-            + "MAN: \"ssdp:discover\"\r\n"
-            + "MX: 1\r\n"
-            + "ST: urn:schemas-upnp-org:service:AVTransport:1\r\n"
-            + "\r\n"
+        // 同时兼容只认 AVTransport、MediaRenderer 或 ssdp:all 的不同接收端
+        let searchTargets = [
+            "urn:schemas-upnp-org:service:AVTransport:1",
+            "urn:schemas-upnp-org:device:MediaRenderer:1",
+            "ssdp:all"
+        ]
 
-        // NWConnection 与 continuation 都不是 Sendable，但整段只在本地用、
-        // 且由 Once 保证只跑一次；Swift 6 严格并发下需要显式 nonisolated(unsafe)。
         nonisolated(unsafe) let conn = connection
         return await withCheckedContinuation { continuation in
-            // 一个 closure 管住所有出口：状态回调、发送失败、收到响应、超时
-            // 都可能先到，只让第一个真正 resume，顺手把连接收掉。
             nonisolated(unsafe) let cont = continuation
             let finish = Once<URL?> { value in
                 conn.cancel()
                 cont.resume(returning: value)
             }
+
+            @Sendable func receiveNext() {
+                conn.receiveMessage { data, _, _, error in
+                    if let data, let text = String(data: data, encoding: .utf8),
+                       let location = Self.extractLocation(from: text) {
+                        finish(location)
+                        return
+                    }
+                    if error == nil {
+                        // 如果第一个 UDP 包不含 LOCATION，继续收下一个包直到超时
+                        receiveNext()
+                    }
+                }
+            }
+
             connection.stateUpdateHandler = { newState in
                 switch newState {
                 case .ready:
-                    connection.send(content: payload.data(using: .utf8),
-                                    completion: .contentProcessed { error in
-                        if error != nil { finish(nil) }
-                    })
-                    connection.receiveMessage { data, _, _, _ in
-                        var location: URL?
-                        if let data, let text = String(data: data, encoding: .utf8) {
-                            location = Self.extractLocation(from: text)
-                        }
-                        finish(location)
+                    receiveNext()
+                    for st in searchTargets {
+                        let payload = "M-SEARCH * HTTP/1.1\r\n"
+                            + "HOST: 239.255.255.250:1900\r\n"
+                            + "MAN: \"ssdp:discover\"\r\n"
+                            + "MX: 1\r\n"
+                            + "ST: \(st)\r\n"
+                            + "\r\n"
+                        connection.send(content: payload.data(using: .utf8), completion: .idempotent)
                     }
-                case .waiting, .failed:
+                case .failed:
                     finish(nil)
                 default:
                     break
@@ -301,7 +343,6 @@ actor DLNAUnicastProber {
             }
             connection.start(queue: .global(qos: .userInitiated))
 
-            // 超时必须收口：绝大多数 IP 不会回。
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 finish(nil)
             }
@@ -309,9 +350,11 @@ actor DLNAUnicastProber {
     }
 
     private static func extractLocation(from response: String) -> URL? {
-        for line in response.components(separatedBy: "\r\n") {
-            if line.uppercased().hasPrefix("LOCATION:") {
-                let value = line.dropFirst("LOCATION:".count)
+        // 兼容 "\r\n" 与 "\n" 换行
+        for line in response.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.uppercased().hasPrefix("LOCATION:") {
+                let value = trimmed.dropFirst("LOCATION:".count)
                     .trimmingCharacters(in: .whitespaces)
                 return URL(string: value)
             }
@@ -319,9 +362,19 @@ actor DLNAUnicastProber {
         return nil
     }
 
-    // MARK: 设备描述
+    // MARK: 设备描述（强制覆写虚拟网卡 Host）
 
-    private func fetchDescription(from locationURL: URL, ip: String) async -> DLNADevice? {
+    private func fetchDescription(from rawLocationURL: URL, ip: String) async -> DLNADevice? {
+        // 【关键修复】：如果电脑开了 Tailscale/Clash，SSDP 返回的 LOCATION 可能是 100.x.x.x 或 198.18.x.x，
+        // 强制将 URL 的 host 替换为我们实际打通的局域网 IP。
+        let locationURL: URL
+        if var comp = URLComponents(url: rawLocationURL, resolvingAgainstBaseURL: false) {
+            comp.host = ip
+            locationURL = comp.url ?? rawLocationURL
+        } else {
+            locationURL = rawLocationURL
+        }
+
         do {
             let (data, response) = try await session.data(from: locationURL)
             guard let http = response as? HTTPURLResponse,
@@ -343,11 +396,14 @@ actor DLNAUnicastProber {
 
             let controlURL: URL
             if rawPath.lowercased().hasPrefix("http") {
-                guard let url = URL(string: rawPath) else { return nil }
+                guard var comp = URLComponents(string: rawPath) else { return nil }
+                comp.host = ip // 同样防止 controlURL 写死虚拟网卡 IP
+                guard let url = comp.url else { return nil }
                 controlURL = url
             } else {
                 guard var components = URLComponents(url: locationURL,
                                                      resolvingAgainstBaseURL: false) else { return nil }
+                components.host = ip
                 components.path = rawPath.hasPrefix("/") ? rawPath : "/" + rawPath
                 components.query = nil
                 guard let url = components.url else { return nil }
@@ -369,7 +425,6 @@ actor DLNAUnicastProber {
     }
 }
 
-/// 一次性回调：并发来的多个出口只跑第一个。
 private final class Once<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private let body: @Sendable (Value) -> Void
@@ -389,33 +444,33 @@ private final class Once<Value: Sendable>: @unchecked Sendable {
     }
 }
 
-// MARK: - 本地网络权限
+// MARK: - 本地网络权限检查（防误杀优化）
 
-/// 本地网络权限探测：起一次极短的 Bonjour 浏览，只为触发系统授权弹窗并判断
-/// 是否「被拒」。Bonjour 走普通单播 DNS，**不需要 multicast 签名能力**。
 private enum LocalNetworkPermission {
-    static func probe() async -> Bool {
+    /// 只有当系统明确返回 PolicyDenied (-65554) 时才判定为无权限；
+    /// 避免因 Info.plist 未声明 _dlna._tcp 导致误报无权限。
+    static func isExplicitlyDenied() async -> Bool {
         await withCheckedContinuation { continuation in
             let state = ProbeState()
-            let descriptor = NWBrowser.Descriptor.bonjour(type: "_dlna._tcp", domain: nil)
+            let descriptor = NWBrowser.Descriptor.bonjour(type: "_airplay._tcp", domain: nil)
             let browser = NWBrowser(for: descriptor, using: NWParameters())
             browser.stateUpdateHandler = { browserState in
                 switch browserState {
                 case .ready:
                     guard state.claim() else { return }
                     browser.cancel()
-                    continuation.resume(returning: true)
+                    continuation.resume(returning: false)
                 case .waiting(let error), .failed(let error):
                     guard state.claim() else { return }
                     browser.cancel()
-                    continuation.resume(returning: !error.isLocalNetworkDenied)
+                    continuation.resume(returning: error.isLocalNetworkDenied)
                 default:
                     break
                 }
             }
             browser.start(queue: .global(qos: .userInitiated))
             Task {
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .milliseconds(600))
                 guard state.claim() else { return }
                 browser.cancel()
                 continuation.resume(returning: false)
