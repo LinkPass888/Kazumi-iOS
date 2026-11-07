@@ -36,7 +36,16 @@ final class DanmakuOverlayView: UIView {
                 return
             }
 
-            let line = CTLineCreateWithAttributedString(attributedText as CFAttributedString)
+            // CTLine 若保留 `.foregroundColor`，即使 CGContext 是 `.stroke`，
+            // CoreText 仍会拿字色画轮廓——白字的描边就因此变白。单独给这次
+            // CoreText 绘制加「颜色取自 context」，让 stroke 固定读黑色、fill 读原字色。
+            let coreTextString = NSMutableAttributedString(attributedString: attributedText)
+            coreTextString.addAttribute(
+                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String),
+                value: true,
+                range: NSRange(location: 0, length: coreTextString.length)
+            )
+            let line = CTLineCreateWithAttributedString(coreTextString as CFAttributedString)
             var ascent: CGFloat = 0
             var descent: CGFloat = 0
             var leading: CGFloat = 0
@@ -388,7 +397,6 @@ final class DanmakuOverlayView: UIView {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: textColor,
-            .strokeColor: UIColor.black,
             .paragraphStyle: paragraph
         ]
         label.attributedText = NSAttributedString(string: comment.text, attributes: attributes)
