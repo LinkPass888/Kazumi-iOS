@@ -3683,10 +3683,8 @@ struct PlayerScreen: View {
         .foregroundStyle(.primary)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
+        // 跟倍速 HUD 同一套玻璃底；胶囊的尺寸和圆角都不动。
+        .playerGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .allowsHitTesting(false)
         .transition(.opacity)
     }
