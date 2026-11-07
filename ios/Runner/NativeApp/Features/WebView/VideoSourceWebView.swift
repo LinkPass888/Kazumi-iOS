@@ -18,11 +18,14 @@ struct VideoParserEvent: Sendable {
     var url: String
     var offset: Int
     var format: VideoSourceFormat
+    /// 这一次 `load()` 的代号：换集 / 重试后旧页面迟到的回调靠它丢掉。
+    var loadID: Int
 
-    init(url: String, offset: Int = 0, format: VideoSourceFormat = .auto) {
+    init(url: String, offset: Int = 0, format: VideoSourceFormat = .auto, loadID: Int = 0) {
         self.url = url
         self.offset = offset
         self.format = format
+        self.loadID = loadID
     }
 }
 
@@ -53,6 +56,8 @@ final class VideoSourceWebView: NSObject {
     private var isVideoSourceLoaded = false
     private var useLegacyParser = false
     private var isLoading = false
+    /// 每次 `load()` 自增：解析事件带上它，页面换掉之后旧事件就失效。
+    private var loadGeneration = 0
 
     private let userAgent = HTTPHeaders.randomUserAgent()
 
@@ -126,10 +131,16 @@ final class VideoSourceWebView: NSObject {
         sessionUserAgent = (storedUA?.isEmpty ?? true) ? nil : storedUA
     }
 
-    func load(url: String, useLegacyParser: Bool, offset: Int = 0) async {
+    @discardableResult
+    func load(url: String, useLegacyParser: Bool, offset: Int = 0) async -> Int {
         await initialize()
-        guard let webView else { return }
-        await unloadPage()
+        guard let webView else { return loadGeneration }
+        // 第一次加载时没有旧页面，别先空跑一次 about:blank（会多等一次导航）。
+        if webView.url != nil {
+            await unloadPage()
+        }
+        loadGeneration &+= 1
+        let generation = loadGeneration
         self.useLegacyParser = useLegacyParser
         if !hasInjectedScripts {
             injectScripts(useLegacyParser: useLegacyParser)
@@ -143,7 +154,7 @@ final class VideoSourceWebView: NSObject {
         onVideoLoading?(true)
         guard let target = URL(string: url) else {
             emit("Invalid URL: \(url)")
-            return
+            return generation
         }
         // 登录态要在导航之前就位：Cookie 先落进这个会话，UA 跟登录时一致。
         // 没有登录态的规则要显式回到原来那个随机 UA：不然换一条不用登录的规则，
@@ -160,6 +171,7 @@ final class VideoSourceWebView: NSObject {
         }
         emit("started loading: \(url)")
         webView.load(URLRequest(url: target))
+        return generation
     }
 
     func unloadPage() async {
@@ -241,7 +253,7 @@ final class VideoSourceWebView: NSObject {
         } else {
             resolved = message
         }
-        let event = VideoParserEvent(url: resolved, offset: offset)
+        let event = VideoParserEvent(url: resolved, offset: offset, loadID: loadGeneration)
         onVideoURLParser?(event)
     }
 
@@ -264,7 +276,7 @@ final class VideoSourceWebView: NSObject {
         onVideoLoading?(false)
         emit("Loading video source \(decoded)")
         Task { @MainActor in await self.unloadPage() }
-        onVideoURLParser?(VideoParserEvent(url: decoded, offset: offset))
+        onVideoURLParser?(VideoParserEvent(url: decoded, offset: offset, loadID: loadGeneration))
     }
 
     /// 新版解析器：接受绝对或相对地址，且尚未解析过。

@@ -271,8 +271,6 @@ struct PlayerScreen: View {
     // 本批新增：画面比例、控制栏自动隐藏、锁定、长按临时倍速。
     @State private var aspectRatioMode: PlayerAspectRatioMode = .automatic
     @State private var controlsVisible = true
-    /// 「正在播放」的节拍计数：250 毫秒一轮，凑到 8 轮（2 秒）同步一次。
-    @State private var nowPlayingTick = 0
     /// 上一次看到的「别的 App 占着音频会话吗」。只在变了的时候写一行日志（LP 4976）。
     @State private var lastOtherAudioPlaying: Bool?
     /// 这一集是「因为切到后台才停下的」吗——只有这种暂停才在回前台时自动接上，
@@ -582,6 +580,9 @@ struct PlayerScreen: View {
             configureNowPlayingCommands()
             // 一进页面就把代理读一次：开关本来就开着的那次播放不靠别的时机。
             refreshProxy()
+            // 节拍计数只活在这个循环里：写进 @State 会让整个播放页每 250ms
+            // 重新求值一次，白白增加 SwiftUI 的 body 开销。
+            var nowPlayingTick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }

@@ -67,6 +67,8 @@ final class PlayerSurfaceModel {
     /// 上一帧内核报的 `pause` / `core-idle`：只在真的变了的时候写一行日志。
     private var lastCorePaused = false
     private var lastCoreIdle = false
+    /// 缓冲段刷新的节拍：状态快照 4Hz，这里 1Hz 就够。
+    private var bufferedRefreshTick = 0
     /// 这次加载走到哪一步（由 mpv 事件推，见 `MPVLoadPhase`）。
     private(set) var loadPhase: MPVLoadPhase = .idle
 
@@ -301,6 +303,12 @@ final class PlayerSurfaceModel {
             let size = CGSize(width: snapshot.videoWidth, height: snapshot.videoHeight)
             if videoSize != size { videoSize = size }
         }
+        // 缓冲段不需要跟着 4Hz 的状态快照走：每 4 拍读一次 mpv 属性就够，
+        // 少一次主线程的同步属性查询，播放中更不容易被 UI 抢时间。
+        bufferedRefreshTick &+= 1
+        if bufferedRefreshTick % 4 == 0 {
+            refreshBufferedTime()
+        }
         if snapshot.hasVideo {
             if !isReady {
                 // 第一帧到手：把起播那次没生效的「别停」补回来，然后按正常播放补速率。
@@ -462,6 +470,9 @@ final class MPVHostView: UIView {
         // 画面尺寸 / 填充方式变了也要同步 drawable：暂停时没有新帧，
         // 旧尺寸的 swapchain 会被系统拉伸（同下面的 layoutSubviews）。
         let geometryChanged = videoSize != self.videoSize || fillMode != self.fillMode
+        let insetChanged = danmakuTopInset != self.danmakuTopInset
+        // SwiftUI 每个状态快照都会走这里；三项都没变时不要再触发布局。
+        guard geometryChanged || insetChanged else { return }
         self.videoSize = videoSize
         self.fillMode = fillMode
         self.danmakuTopInset = danmakuTopInset
@@ -568,7 +579,6 @@ struct MPVPlayerContainer: UIViewRepresentable {
         }
         engine.onSnapshot = { [weak surface] snapshot in
             surface?.handle(snapshot: snapshot)
-            surface?.refreshBufferedTime()
         }
         engine.onLog = { message in
             KazumiLogBuffer.player("mpv: \(message)")

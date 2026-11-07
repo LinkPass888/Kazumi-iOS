@@ -152,11 +152,21 @@ final class MPVEngine {
     /// 内核已经在跑的时候改这一项不会重开文件，只影响后面还要读多少——
     /// 缓冲被打空的当下改小也会立刻生效，所以「移动数据→低内存」不用重开这一集。
     func applyCacheSize(_ bytes: Int) {
+        // SwiftUI 每次刷新都会把这一项重新算一遍；值没变就别再打 mpv 属性。
+        // 以前每 250ms 重设一次 demuxer 缓存，慢源上会被反复打断，表现就是卡顿。
+        guard bytes != cacheBytes else { return }
         cacheBytes = bytes
         guard let mpv = handle else { return }
         let value = String(bytes)
         mpv_set_property_string(mpv, "demuxer-max-bytes", value)
         mpv_set_property_string(mpv, "demuxer-max-back-bytes", value)
+        mpv_set_property_string(mpv, "demuxer-readahead-secs", readAheadSeconds(for: bytes))
+    }
+
+    /// 完整缓存给 5 秒预读，低内存档仍只预读 1 秒：预读是「最多读多少」，
+    /// 不会让起播变慢，但能把慢源上 1 秒窗口耗尽造成的 core-idle 压下去。
+    private func readAheadSeconds(for bytes: Int) -> String {
+        bytes <= PlaybackCachePolicy.lowMemoryBytes ? "1" : "5"
     }
 
     private var lastSnapshot = MPVSnapshot(
@@ -260,7 +270,7 @@ final class MPVEngine {
         // main 的网络预取窗口。1500 MiB 只限制内存上限，时间窗口仍要足够长；
         // 3x 播放时默认窗口会很快耗尽，表现成频繁 core-idle。
         setOption("cache-secs", "36000")
-        setOption("demuxer-readahead-secs", "1")
+        setOption("demuxer-readahead-secs", readAheadSeconds(for: cacheBytes))
 
         let initStatus = mpv_initialize(mpv)
         guard initStatus >= 0 else {
