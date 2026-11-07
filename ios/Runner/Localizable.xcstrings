@@ -9183,6 +9183,36 @@
         }
       }
     },
+    "正在连接播放源…":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"正在連接播放源…"
+          }
+        }
+      }
+    },
+    "正在缓冲…":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"正在緩衝…"
+          }
+        }
+      }
+    },
+    "正在跳转…":{
+      "localizations":{
+        "zh-Hant":{
+          "stringUnit":{
+            "state":"translated",
+            "value":"正在跳轉…"
+          }
+        }
+      }
+    },
     "正在追":{
       "localizations":{
         "zh-Hant":{

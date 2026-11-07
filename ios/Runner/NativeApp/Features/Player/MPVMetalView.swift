@@ -60,6 +60,11 @@ final class MPVMetalView: UIView {
         metalLayer.framebufferOnly = true
         metalLayer.isOpaque = true
         metalLayer.wantsExtendedDynamicRangeContent = false
+        // 转屏那一拍 layer.frame 和 drawableSize 不是同时更新的：旧的一帧
+        // 如果按 stretch 铺满新 bounds，就会先被拉宽/压扁。保持比例缩放，
+        // 等 mpv 下一帧按新 drawable 重画，稳态下两者比例一致，没有副作用。
+        metalLayer.contentsGravity = .resizeAspect
+        metalLayer.masksToBounds = true
         updateDrawableSize()
     }
 

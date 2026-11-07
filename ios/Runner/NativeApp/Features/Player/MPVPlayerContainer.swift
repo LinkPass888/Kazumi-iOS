@@ -491,7 +491,11 @@ final class MPVHostView: UIView {
             lastLayoutSize = bounds.size
             metalView.setNeedsLayout()
             metalView.updateDrawableSize()
-            engine?.reconfigureVideoOutputForSurfaceResize()
+            // 还没拿到这一集的画面尺寸（起播 / 换集中）时不要重建 VO：
+            // 这时 drawable 只是在跟着转屏变，旧画面不该被当成新尺寸去重配。
+            if videoSize.width > 0, videoSize.height > 0 {
+                engine?.reconfigureVideoOutputForSurfaceResize()
+            }
         }
         let rect = fillMode.videoRect(in: bounds, videoSize: videoSize)
         // 顶部让出控制栏（横屏 44pt），底部仍留 20% 给字幕：

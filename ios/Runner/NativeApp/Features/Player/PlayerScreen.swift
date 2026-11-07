@@ -1112,7 +1112,13 @@ struct PlayerScreen: View {
                surface.errorMessage == nil,
                controller.playbackURL != nil {
                 loadingAtCenterLine {
-                    PlayerLoadingHUD(bytesPerSecond: surface.downloadSpeed)
+                    PlayerLoadingHUD(
+                        bytesPerSecond: surface.downloadSpeed,
+                        info: playbackLoadingInfo,
+                        // 没有速度读数时不要再挂一行「— KB/s」；上面那行已经
+                        // 说清楚是在连接还是在缓冲，避免用户猜这个横线是什么。
+                        reservesSpeedLine: false
+                    )
                 }
                 .transition(.opacity)
             }
@@ -3226,10 +3232,10 @@ struct PlayerScreen: View {
             .foregroundStyle(.white)
             .tint(.white)
             .focused($danmakuFieldFocused)
-            // iOS 的 returnKeyType 没有「取消」这一档；这里把回车动作改成取消，
-            // 键帽保留系统回车符号，发送仍然只走右边那颗按钮。
-            .submitLabel(.return)
-            .onSubmit { cancelDanmakuInput() }
+            // 回车保持「发送」这个明确动作；取消入口另议，不要用回车符号
+            // 承载一个看不出来的「取消」行为。
+            .submitLabel(.send)
+            .onSubmit { sendDanmaku() }
             .disabled(!danmakuEnabled)
             .padding(.leading, 10)
             .padding(.trailing, 10)
@@ -3278,15 +3284,6 @@ struct PlayerScreen: View {
         .frame(height: 33)
         .background(.white.opacity(danmakuEnabled ? 0.38 : 0.18),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    /// 键盘回车：不收弹幕，直接当取消——清空草稿、收键盘；原来暂停的由焦点
-    /// 变化那条路径恢复播放。
-    private func cancelDanmakuInput() {
-        danmakuDraft = ""
-        danmakuFieldFocused = false
-        noteInteraction()
-        showControlsBriefly()
     }
 
     private var canSendDanmaku: Bool {
@@ -3614,6 +3611,25 @@ struct PlayerScreen: View {
         // 缓冲 / 拖进度：短暂提示，跟首帧那套逻辑分开（LP 4818 第 7 条）。
         if surface.isSeeking || surface.isStalled { return true }
         return surface.isLoadingFirstFrame
+    }
+
+    /// 加载圈下面那行「到底在等什么」。
+    ///
+    /// 速度没出来时以前是「— KB/s」，看不出是在连源、等首帧还是卡在缓冲。
+    /// 这里按状态说人话；速度出来后 HUD 会多一行实时速率。
+    private var playbackLoadingInfo: String? {
+        if surface.isSeeking {
+            return String(localized: "正在跳转…")
+        }
+        if surface.isStalled {
+            return String(localized: "正在缓冲…")
+        }
+        if surface.isLoadingFirstFrame {
+            return surface.downloadSpeed > 0
+                ? String(localized: "正在缓冲…")
+                : String(localized: "正在连接播放源…")
+        }
+        return nil
     }
 
     /// 加载符号的**圆心**钉在画面正中那条线上——跟两侧快进快退同一水平，
