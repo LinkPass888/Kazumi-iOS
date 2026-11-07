@@ -36,26 +36,26 @@ final class DanmakuOverlayView: UIView {
                 return
             }
 
-            // CTLine 若保留 `.foregroundColor`，即使 CGContext 是 `.stroke`，
-            // CoreText 仍会拿字色画轮廓——白字的描边就因此变白。单独给这次
-            // CoreText 绘制加「颜色取自 context」，让 stroke 固定读黑色、fill 读原字色。
-            let coreTextString = NSMutableAttributedString(attributedString: attributedText)
-            coreTextString.addAttribute(
-                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String),
-                value: true,
-                range: NSRange(location: 0, length: coreTextString.length)
+            // 用同一份排版属性生成两条 CTLine：描边线只把字色改成黑色，
+            // 填充线保留弹幕原色。字体、字重、字距和段落完全一致，因此几何一致。
+            // 不再依赖 CGContext 的 fillColor；CoreText 对 run 自带颜色的处理会覆盖它。
+            let strokeString = NSMutableAttributedString(attributedString: attributedText)
+            strokeString.addAttribute(
+                .foregroundColor,
+                value: UIColor.black,
+                range: NSRange(location: 0, length: strokeString.length)
             )
-            let line = CTLineCreateWithAttributedString(coreTextString as CFAttributedString)
+            let strokeLine = CTLineCreateWithAttributedString(strokeString as CFAttributedString)
+            let fillLine = CTLineCreateWithAttributedString(attributedText as CFAttributedString)
             var ascent: CGFloat = 0
             var descent: CGFloat = 0
             var leading: CGFloat = 0
             let lineWidth = CGFloat(
-                CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+                CTLineGetTypographicBounds(fillLine, &ascent, &descent, &leading)
             )
             let lineHeight = ascent + descent + leading
-            // 仿 canvas_danmaku 的两次 drawParagraph：同一个 CTLine、同一个基线，
-            // 先用 CGContext 的 .stroke 模式画黑边，再用 .fill 盖实心字。
-            // 两次都用同一条 line，描边就不会相对字形偏移成「斜着的 3D」。
+            // 仿 canvas_danmaku 的两次 drawParagraph：相同排版、相同基线，
+            // 先用 CGContext 的 .stroke 模式画黑边，再用 .fill 盖原色实心字。
             let x = (rect.width - lineWidth) / 2
             let baseline = (rect.height - lineHeight) / 2 + descent + leading / 2
 
@@ -64,7 +64,7 @@ final class DanmakuOverlayView: UIView {
             // UIView 的上下文是左上原点、y 向下；CoreText 要左下原点、y 向上。
             context.translateBy(x: rect.origin.x, y: rect.origin.y + rect.height)
             context.scaleBy(x: 1, y: -1)
-            context.textPosition = CGPoint(x: x, y: baseline)
+            let textOrigin = CGPoint(x: x, y: baseline)
             context.setLineWidth(outlineWidth)
             context.setLineJoin(.round)
             context.setLineCap(.round)
@@ -77,10 +77,13 @@ final class DanmakuOverlayView: UIView {
                 context.setFillColor(fillColor.cgColor)
             }
 
+            // 两遍都复位文字位置，避免 CTLineDraw 改动 text matrix 后第二遍跑出标签外。
             context.setTextDrawingMode(.stroke)
-            CTLineDraw(line, context)
+            context.textPosition = textOrigin
+            CTLineDraw(strokeLine, context)
             context.setTextDrawingMode(.fill)
-            CTLineDraw(line, context)
+            context.textPosition = textOrigin
+            CTLineDraw(fillLine, context)
             context.restoreGState()
         }
     }
