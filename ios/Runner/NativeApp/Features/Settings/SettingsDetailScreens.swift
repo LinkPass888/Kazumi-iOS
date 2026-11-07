@@ -1394,13 +1394,6 @@ struct NetworkSettingsScreen: View {
                     .pickerStyle(.menu)
 
                     RulesMirrorMenu(asListRows: true)
-
-                    NavigationLink {
-                        RulesRepositoryScreen()
-                    } label: {
-                        Text("自定义规则仓库")
-                            .frame(minHeight: 48)
-                    }
                 }
                 .listRowBackground(KazumiPalette.groupedRow(for: colorScheme))
             } header: {

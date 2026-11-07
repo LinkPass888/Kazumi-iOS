@@ -653,12 +653,21 @@ private struct PluginRowView: View {
                 // 版本号被挤成「.6」。辅助功能字号下改成竖排，每颗一行。
                 let metaLayout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                    : AnyLayout(HStackLayout(spacing: 10))
+                    : AnyLayout(HStackLayout(spacing: 12))
                 metaLayout {
-                    Label(plugin.version.isEmpty ? "-" : plugin.version, systemImage: "tag")
-                    Label(plugin.searchMode == .api ? "API" : "XPath", systemImage: plugin.searchMode == .api ? "curlybraces" : "chevron.left.forwardslash.chevron.right")
+                    RuleMetadataLabel(
+                        text: plugin.version.isEmpty ? "-" : plugin.version,
+                        systemImage: "tag"
+                    )
+                    RuleMetadataLabel(
+                        text: plugin.searchMode == .api ? "API" : "XPath",
+                        systemImage: plugin.searchMode == .api ? "curlybraces" : "chevron.left.forwardslash.chevron.right"
+                    )
                     if plugin.antiCrawlerConfig.enabled {
-                        Label("验证", systemImage: "checkmark.shield")
+                        RuleMetadataLabel(
+                            text: String(localized: "验证"),
+                            systemImage: "checkmark.shield"
+                        )
                     }
                 }
                 .font(.caption)

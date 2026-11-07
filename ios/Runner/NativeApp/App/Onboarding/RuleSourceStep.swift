@@ -292,10 +292,10 @@ struct RuleSourceStep: View {
     /// 窄屏放不下时退回纯文字「1.2 · 8月10日」，不截断也不缩字号。
     private func detailRow(_ item: PluginHTTPItem) -> some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                Label(item.version, systemImage: "tag")
+            HStack(spacing: 12) {
+                RuleMetadataLabel(text: item.version, systemImage: "tag")
                 if let updated = item.updatedDateText {
-                    Label(updated, systemImage: "clock")
+                    RuleMetadataLabel(text: updated, systemImage: "clock")
                 }
             }
             .fixedSize()

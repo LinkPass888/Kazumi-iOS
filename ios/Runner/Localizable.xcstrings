@@ -14209,7 +14209,32 @@
           }
         }
       }
-    }
+    },
+    "没搜到设备":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"沒搜到裝置"}}}},
+    "没有本地网络权限":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"沒有本機網路權限"}}}},
+    "确认电视/电脑和手机连的是同一个 Wi-Fi。也可以直接输入 IP 或 IP:端口。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"確認電視／電腦和手機連的是同一個 Wi-Fi。也可以直接輸入 IP 或 IP:連接埠。"}}}},
+    "需要在设置里允许 Kazumi 访问本地网络，才能搜到设备。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"需要在設定裡允許 Kazumi 存取本機網路，才能搜到裝置。"}}}},
+    "正在连接 %@…":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"正在連接 %@…"}}}},
+    "正在扫描 %@.1~254…":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"正在掃描 %@.1~254…"}}}},
+    "DLNA 设备":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"DLNA 裝置"}}}},
+    "转到 Apple TV 或支持隔空播放的电视":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"轉到 Apple TV 或支援 AirPlay 的電視"}}}},
+    "转到同一网络里的电视或盒子":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"轉到同一網路裡的電視或盒子"}}}},
+    "电视自己取流，本机的 UA、Referer、Cookie 带不过去；要这些头的片源会投不上。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"電視自行取流，本機的 UA、Referer、Cookie 無法帶過去；需要這些標頭的片源將無法投放。"}}}},
+    "弹幕、超分、片头片尾跳过、本地字幕只在本机生效。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"彈幕、超分、片頭片尾跳過、本機字幕只在本機生效。"}}}},
+    "在系统列表里选设备":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"在系統列表裡選擇裝置"}}}},
+    "当前选中 AirPlay":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"目前選用 AirPlay"}}}},
+    "正在搜索同一网络里的设备…":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"正在搜尋同一網路裡的裝置…"}}}},
+    "同网络的设备":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"同網路的裝置"}}}},
+    "打开设置":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"開啟設定"}}}},
+    "扫不到？直接输入电视 IP":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"掃不到？直接輸入電視 IP"}}}},
+    "连接":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"連接"}}}},
+    "投屏中 · 手机是遥控器":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"投放中 · 手機是遙控器"}}}},
+    "本机不再出画面和声音":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"本機不再顯示畫面與播放聲音"}}}},
+    "这一集还没解析出地址":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"這一集尚未解析出位址"}}}},
+    "等本机起播后再试。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"等本機開始播放後再試。"}}}},
+    "这个片源投不出去":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"這個片源無法投放"}}}},
+    "换一个片源，或回到本机播放。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"更換片源，或回到本機播放。"}}}},
+    "已回到本机播放":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"已回到本機播放"}}}}
   },
   "version":"1.0"
 }

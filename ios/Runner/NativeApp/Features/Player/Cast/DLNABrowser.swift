@@ -7,6 +7,7 @@
 
 import Foundation
 import Network
+import Observation
 import Darwin
 import os
 
@@ -19,6 +20,12 @@ struct DLNADevice: Identifiable, Equatable, Sendable {
     let controlURL: URL
 
     var detail: String? { ip }
+
+    /// 下次手动连接可直接使用的地址；HTTP/HTTPS 未显式写端口时补标准端口。
+    var reconnectAddress: String {
+        let port = location.port ?? controlURL.port ?? (location.scheme?.lowercased() == "https" ? 443 : 80)
+        return "\(ip):\(port)"
+    }
 }
 
 /// 设备发现状态机。一次只跑一轮，收到就往后抛。
@@ -50,7 +57,7 @@ final class DLNABrowser {
             }
         }
 
-        var allowsRetry: Bool { self == .notFound }
+        var allowsRetry: Bool { true }
         var allowsSettings: Bool { self == .permission }
     }
 
@@ -66,13 +73,20 @@ final class DLNABrowser {
 
     private let prober = DLNAUnicastProber()
     private var searchTask: Task<Void, Never>?
+    /// 独立保存已发现列表，搜索态切走后手动连接仍能把设备并回原列表。
+    private var knownDevices: [DLNADevice] = []
+    /// 每次开始、手动连接或停止都换代；较早操作即使晚返回也不能覆盖新状态。
+    private var operationGeneration = 0
 
     func start() {
         guard state != .searching else { return }
+        operationGeneration &+= 1
+        let generation = operationGeneration
+        knownDevices = []
         state = .searching
         progressText = nil
         searchTask = Task { [weak self] in
-            await self?.runSearch()
+            await self?.runSearch(generation: generation)
         }
     }
 
@@ -82,8 +96,10 @@ final class DLNABrowser {
     }
 
     func stop() {
+        operationGeneration &+= 1
         searchTask?.cancel()
         searchTask = nil
+        knownDevices = []
         state = .idle
         progressText = nil
     }
@@ -92,48 +108,51 @@ final class DLNABrowser {
     func probeIP(_ raw: String) async {
         let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
+
+        // 手动连接优先于后台网段扫描；旧扫描即使晚返回也不能盖掉手动结果。
+        searchTask?.cancel()
+        searchTask = nil
+        operationGeneration &+= 1
+        let generation = operationGeneration
         state = .searching
         progressText = String(localized: "正在连接 \(input)…")
 
         let device = await prober.probeSingleInput(input)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, generation == operationGeneration else { return }
 
         guard let device else {
             state = .failed(.notFound)
             progressText = nil
             return
         }
-        var devices = currentDevices
-        devices.removeAll { $0.id == device.id }
-        devices.insert(device, at: 0)
-        state = .found(devices)
+        knownDevices.removeAll { $0.id == device.id }
+        knownDevices.insert(device, at: 0)
+        state = .found(knownDevices)
         progressText = nil
     }
 
-    private var currentDevices: [DLNADevice] {
-        if case .found(let devices) = state { return devices }
-        return []
-    }
-
-    private func runSearch() async {
-        // 仅当明确为策略拒绝(-65554)时才拦截，防止 Info.plist 漏配 Bonjour 导致误杀
+    private func runSearch(generation: Int) async {
+        // 仅当明确为策略拒绝（PolicyDenied）时才拦截，防止 Info.plist 漏配 Bonjour 导致误杀
         if await LocalNetworkPermission.isExplicitlyDenied() {
+            guard generation == operationGeneration else { return }
             state = .failed(.permission)
+            progressText = nil
             return
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, generation == operationGeneration else { return }
 
         guard let prefix = Self.wifiSubnetPrefix() else {
             state = .failed(.notFound)
+            progressText = nil
             return
         }
         progressText = String(localized: "正在扫描 \(prefix).1~254…")
 
         let found = await prober.scanSubnet(prefix: prefix)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, generation == operationGeneration else { return }
 
-        let devices = found.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
-        state = devices.isEmpty ? .failed(.notFound) : .found(devices)
+        knownDevices = found.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        state = knownDevices.isEmpty ? .failed(.notFound) : .found(knownDevices)
         progressText = nil
     }
 
@@ -203,9 +222,12 @@ actor DLNAUnicastProber {
 
     /// 支持 3 种手动输入格式：完整 http URL、"IP:端口"、纯 "IP"
     func probeSingleInput(_ rawInput: String) async -> DLNADevice? {
+        let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercaseInput = input.lowercased()
+
         // 1. 完整 http://... 链接（如直接从 Macast 复制出来的链接）
-        if rawInput.lowercased().hasPrefix("http://") || rawInput.lowercased().hasPrefix("https://"),
-           let url = URL(string: rawInput),
+        if (lowercaseInput.hasPrefix("http://") || lowercaseInput.hasPrefix("https://")),
+           let url = URL(string: input),
            let host = url.host {
             if let device = await fetchDescription(from: url, ip: host) {
                 return device
@@ -213,27 +235,47 @@ actor DLNAUnicastProber {
         }
 
         // 2. "IP:端口" 格式（如 "192.168.31.88:54321"）
-        let clean = rawInput
-            .replacingOccurrences(of: "http://", with: "")
-            .replacingOccurrences(of: "https://", with: "")
-        let hostPort = clean.split(separator: "/").first.map(String.init) ?? clean
-        let parts = hostPort.split(separator: ":")
+        let clean: String
+        if lowercaseInput.hasPrefix("http://") {
+            clean = String(input.dropFirst("http://".count))
+        } else if lowercaseInput.hasPrefix("https://") {
+            clean = String(input.dropFirst("https://".count))
+        } else {
+            clean = input
+        }
+        let hostPort = clean.split(separator: "/", maxSplits: 1).first.map(String.init) ?? clean
+        let parts = hostPort.split(separator: ":", omittingEmptySubsequences: false)
 
-        if parts.count == 2, let port = Int(parts[1]) {
+        if parts.count == 2 {
+            guard !parts[0].isEmpty,
+                  let port = Int(parts[1]),
+                  (1...65_535).contains(port) else { return nil }
             let ip = String(parts[0])
-            for path in commonPaths {
-                if let url = URL(string: "http://\(ip):\(port)\(path)"),
-                   let device = await fetchDescription(from: url, ip: ip) {
-                    return device
+            return await withTaskGroup(of: DLNADevice?.self) { group in
+                for path in commonPaths {
+                    group.addTask {
+                        guard !Task.isCancelled,
+                              let url = URL(string: "http://\(ip):\(port)\(path)") else {
+                            return nil
+                        }
+                        return await self.fetchDescription(from: url, ip: ip)
+                    }
                 }
+                for await device in group {
+                    if let device {
+                        group.cancelAll()
+                        return device
+                    }
+                }
+                return nil
             }
-            return nil
         }
 
         // 3. 纯 IP 格式：先发多 ST 头的 UDP 1900 单播探测，再扫常见端口兜底
-        let ip = String(parts[0])
-        if let location = await unicastMSearch(to: ip, timeout: 1.2),
-           let device = await fetchDescription(from: location, ip: ip) {
+        guard parts.count == 1, let first = parts.first, !first.isEmpty else { return nil }
+        let ip = String(first)
+        let locations = await unicastMSearch(to: ip, timeout: 1.2)
+        if let device = await firstRenderer(in: locations, ip: ip) {
             return device
         }
         return await probeFallbackPorts(ip: ip)
@@ -246,14 +288,20 @@ actor DLNAUnicastProber {
         var found: [String: DLNADevice] = [:]
 
         for start in stride(from: 0, to: ips.count, by: batchSize) {
+            guard !Task.isCancelled else { break }
             let batch = Array(ips[start..<min(start + batchSize, ips.count)])
             await withTaskGroup(of: DLNADevice?.self) { group in
                 for ip in batch {
                     group.addTask {
-                        await self.unicastOnly(ip: ip)
+                        guard !Task.isCancelled else { return nil }
+                        return await self.unicastOnly(ip: ip)
                     }
                 }
                 for await device in group {
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
                     if let device { found[device.id] = device }
                 }
             }
@@ -262,8 +310,24 @@ actor DLNAUnicastProber {
     }
 
     private func unicastOnly(ip: String) async -> DLNADevice? {
-        guard let location = await unicastMSearch(to: ip, timeout: 0.65) else { return nil }
-        return await fetchDescription(from: location, ip: ip)
+        guard !Task.isCancelled else { return nil }
+        let locations = await unicastMSearch(to: ip, timeout: 1.05)
+        guard !locations.isEmpty else { return nil }
+        if let device = await firstRenderer(in: locations, ip: ip) {
+            return device
+        }
+        guard !Task.isCancelled else { return nil }
+        return await probeFallbackPorts(ip: ip)
+    }
+
+    private func firstRenderer(in locations: [URL], ip: String) async -> DLNADevice? {
+        for location in locations {
+            guard !Task.isCancelled else { return nil }
+            if let device = await fetchDescription(from: location, ip: ip) {
+                return device
+            }
+        }
+        return nil
     }
 
     private func probeFallbackPorts(ip: String) async -> DLNADevice? {
@@ -288,12 +352,13 @@ actor DLNAUnicastProber {
 
     // MARK: 单播 M-SEARCH（多 ST 头连发 + 持续收包过滤）
 
-    private func unicastMSearch(to ip: String, timeout: TimeInterval) async -> URL? {
+    private func unicastMSearch(to ip: String, timeout: TimeInterval) async -> [URL] {
         let host = NWEndpoint.Host(ip)
         let port = NWEndpoint.Port(integerLiteral: 1900)
         let connection = NWConnection(host: host, port: port, using: .udp)
+        let locations = LocationAccumulator()
 
-        // 同时兼容只认 AVTransport、MediaRenderer 或 ssdp:all 的不同接收端
+        // 同时兼容只认 AVTransport、MediaRenderer 或 ssdp:all 的不同接收端。
         let searchTargets = [
             "urn:schemas-upnp-org:service:AVTransport:1",
             "urn:schemas-upnp-org:device:MediaRenderer:1",
@@ -301,51 +366,56 @@ actor DLNAUnicastProber {
         ]
 
         nonisolated(unsafe) let conn = connection
-        return await withCheckedContinuation { continuation in
-            nonisolated(unsafe) let cont = continuation
-            let finish = Once<URL?> { value in
-                conn.cancel()
-                cont.resume(returning: value)
-            }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let finish = Once<[URL]> { value in
+                    conn.cancel()
+                    continuation.resume(returning: value)
+                }
 
-            @Sendable func receiveNext() {
-                conn.receiveMessage { data, _, _, error in
-                    if let data, let text = String(data: data, encoding: .utf8),
-                       let location = Self.extractLocation(from: text) {
-                        finish(location)
-                        return
+                @Sendable func receiveNext() {
+                    conn.receiveMessage { data, _, _, error in
+                        if let data,
+                           let text = String(data: data, encoding: .utf8),
+                           let location = Self.extractLocation(from: text) {
+                            // ssdp:all 可能先回媒体服务器或网关；先收齐，再逐一验证描述文件。
+                            locations.insert(location)
+                        }
+                        if error == nil {
+                            receiveNext()
+                        } else {
+                            finish(locations.snapshot())
+                        }
                     }
-                    if error == nil {
-                        // 如果第一个 UDP 包不含 LOCATION，继续收下一个包直到超时
+                }
+
+                conn.stateUpdateHandler = { newState in
+                    switch newState {
+                    case .ready:
                         receiveNext()
+                        for st in searchTargets {
+                            let payload = "M-SEARCH * HTTP/1.1\r\n"
+                                + "HOST: 239.255.255.250:1900\r\n"
+                                + "MAN: \"ssdp:discover\"\r\n"
+                                + "MX: 1\r\n"
+                                + "ST: \(st)\r\n"
+                                + "\r\n"
+                            conn.send(content: payload.data(using: .utf8), completion: .idempotent)
+                        }
+                    case .failed, .cancelled:
+                        finish(locations.snapshot())
+                    default:
+                        break
                     }
                 }
-            }
+                conn.start(queue: .global(qos: .userInitiated))
 
-            connection.stateUpdateHandler = { newState in
-                switch newState {
-                case .ready:
-                    receiveNext()
-                    for st in searchTargets {
-                        let payload = "M-SEARCH * HTTP/1.1\r\n"
-                            + "HOST: 239.255.255.250:1900\r\n"
-                            + "MAN: \"ssdp:discover\"\r\n"
-                            + "MX: 1\r\n"
-                            + "ST: \(st)\r\n"
-                            + "\r\n"
-                        connection.send(content: payload.data(using: .utf8), completion: .idempotent)
-                    }
-                case .failed:
-                    finish(nil)
-                default:
-                    break
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    finish(locations.snapshot())
                 }
             }
-            connection.start(queue: .global(qos: .userInitiated))
-
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                finish(nil)
-            }
+        } onCancel: {
+            conn.cancel()
         }
     }
 
@@ -401,11 +471,16 @@ actor DLNAUnicastProber {
                 guard let url = comp.url else { return nil }
                 controlURL = url
             } else {
-                guard var components = URLComponents(url: locationURL,
-                                                     resolvingAgainstBaseURL: false) else { return nil }
+                // 相对 controlURL 必须按描述文件（或 URLBase）解析，不能一律塞到域名根目录；
+                // 例如 /upnp/desc.xml 里的 "ctl/AVTransport" 应落在 /upnp/ctl/AVTransport。
+                let declaredBase = Self.xmlTag("URLBase", in: xml).flatMap { URL(string: $0) }
+                let baseURL = declaredBase ?? locationURL
+                guard let resolved = URL(string: rawPath, relativeTo: baseURL)?.absoluteURL,
+                      var components = URLComponents(
+                        url: resolved,
+                        resolvingAgainstBaseURL: false
+                      ) else { return nil }
                 components.host = ip
-                components.path = rawPath.hasPrefix("/") ? rawPath : "/" + rawPath
-                components.query = nil
                 guard let url = components.url else { return nil }
                 controlURL = url
             }
@@ -422,6 +497,25 @@ actor DLNAUnicastProber {
         }
         return String(xml[start.upperBound..<end.lowerBound])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private final class LocationAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: Set<String> = []
+    private var values: [URL] = []
+
+    func insert(_ url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard seen.insert(url.absoluteString).inserted else { return }
+        values.append(url)
+    }
+
+    func snapshot() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
     }
 }
 
@@ -447,7 +541,7 @@ private final class Once<Value: Sendable>: @unchecked Sendable {
 // MARK: - 本地网络权限检查（防误杀优化）
 
 private enum LocalNetworkPermission {
-    /// 只有当系统明确返回 PolicyDenied (-65554) 时才判定为无权限；
+    /// 只有当系统明确返回 PolicyDenied / NotPermitted 时才判定为无权限；
     /// 避免因 Info.plist 未声明 _dlna._tcp 导致误报无权限。
     static func isExplicitlyDenied() async -> Bool {
         await withCheckedContinuation { continuation in
@@ -493,7 +587,8 @@ private enum LocalNetworkPermission {
 private extension NWError {
     var isLocalNetworkDenied: Bool {
         if case .dns(let code) = self {
-            return code == -65554 // kDNSServiceErr_PolicyDenied
+            // dns_sd.h：PolicyDenied = -65570，NotPermitted = -65571。
+            return code == -65570 || code == -65571
         }
         return false
     }

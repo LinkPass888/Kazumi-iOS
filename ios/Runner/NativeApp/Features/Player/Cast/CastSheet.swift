@@ -61,6 +61,7 @@ struct CastSheet: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(SettingsStore.self) private var settings
 
     /// 这一集的媒体地址；nil 就是还没解析出来。
     let mediaURL: String?
@@ -129,6 +130,9 @@ struct CastSheet: View {
             }
         }
         .onAppear {
+            if manualIP.isEmpty {
+                manualIP = settings.lastDLNAAddress
+            }
             // DLNA 一进来就开搜，切过去就有列表；AirPlay 不用搜。
             if method == .dlna { browser.start() }
         }
@@ -387,8 +391,9 @@ struct CastSheet: View {
                 .font(.footnote)
                 .foregroundStyle(KazumiPalette.secondaryText(for: colorScheme))
             HStack(spacing: 8) {
-                TextField("192.168.31.88", text: $manualIP)
+                TextField("192.168.31.88:8895", text: $manualIP)
                     .font(.footnote)
+                    // 端口要连冒号一起打出来，数字键盘上没有冒号。
                     .keyboardType(.numbersAndPunctuation)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -548,6 +553,8 @@ struct CastSheet: View {
         Task {
             do {
                 try await session.start(device: device, mediaURL: url)
+                settings.lastDLNAAddress = device.reconnectAddress
+                manualIP = device.reconnectAddress
                 // 电视开始播了，本机就别再出声（design-cast.md §3.7）。
                 onPause()
             } catch {

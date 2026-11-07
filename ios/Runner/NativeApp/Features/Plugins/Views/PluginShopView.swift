@@ -8,6 +8,43 @@
 
 import SwiftUI
 
+/// 规则仓库顶部的三种目录筛选。
+enum PluginShopFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case installed
+    case update
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .all: String(localized: "全部")
+        case .installed: String(localized: "已安装")
+        case .update: String(localized: "可更新")
+        }
+    }
+
+    func includes(_ status: PluginCatalogItemStatus) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .installed:
+            status == .installed || status == .update
+        case .update:
+            status == .update
+        }
+    }
+}
+
+extension PluginHTTPItem {
+    /// 仓库搜索同时查规则名与作者；空白搜索词保持全部结果。
+    func matchesCatalogSearch(_ rawQuery: String) -> Bool {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        return name.localizedStandardContains(query) || author.localizedStandardContains(query)
+    }
+}
+
 struct PluginShopView: View {
     @Environment(PluginsController.self) private var plugins
     @Environment(\.colorScheme) private var colorScheme
@@ -16,6 +53,10 @@ struct PluginShopView: View {
     @State private var busyItems: Set<String> = []
     @State private var errorMessage: String?
     @State private var toast: String?
+    @State private var selectedFilter: PluginShopFilter = .all
+    @State private var query = ""
+    @State private var isSearching = false
+    @FocusState private var searchFocused: Bool
 
     /// 仓库列表：按仓库里的更新时间倒序，新的在上；同一时间按名字排，免得每次进来顺序飘。
     private var sortedItems: [PluginHTTPItem] {
@@ -25,11 +66,23 @@ struct PluginShopView: View {
         }
     }
 
-    /// 目录里的全部规则（LP 2519：规则不多，不做搜索框）。
-    private var filteredItems: [PluginHTTPItem] { sortedItems }
+    /// 先按安装状态筛选，再在规则名和作者里搜索。
+    private var filteredItems: [PluginHTTPItem] {
+        sortedItems.filter { item in
+            selectedFilter.includes(plugins.pluginStatus(item)) && item.matchesCatalogSearch(query)
+        }
+    }
 
     var body: some View {
         List {
+            Section {
+                controlBar
+                    .padding(.horizontal, 16)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+
             if isLoading && plugins.pluginHTTPList.isEmpty {
                 Section {
                     HStack {
@@ -41,11 +94,19 @@ struct PluginShopView: View {
                 }
             } else if filteredItems.isEmpty {
                 Section {
-                    ContentUnavailableView(
-                        "规则目录为空",
-                        systemImage: "shippingbox",
-                        description: Text("下拉刷新重试。")
-                    )
+                    if plugins.pluginHTTPList.isEmpty {
+                        ContentUnavailableView(
+                            "规则目录为空",
+                            systemImage: "shippingbox",
+                            description: Text("下拉刷新重试。")
+                        )
+                    } else {
+                        ContentUnavailableView(
+                            "没有找到规则",
+                            systemImage: query.isEmpty ? "line.3.horizontal.decrease.circle" : "magnifyingglass",
+                            description: Text("换个关键词再试试。")
+                        )
+                    }
                 }
             } else {
                 Section {
@@ -76,17 +137,12 @@ struct PluginShopView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await refresh(force: true) }
+                NavigationLink {
+                    RulesRepositoryScreen()
                 } label: {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
+                    Image(systemName: "link.badge.plus")
                 }
-                .disabled(isLoading)
-                .accessibilityLabel("刷新")
+                .accessibilityLabel("自定义规则仓库")
             }
         }
         .refreshable { await refresh(force: true) }
@@ -110,6 +166,103 @@ struct PluginShopView: View {
             Text(errorMessage ?? "")
         }
         .task { await refresh(force: false) }
+        // 搜索框是在 isSearching 切换后才进入布局，等它出现再申请焦点。
+        .onChange(of: isSearching) { _, value in
+            searchFocused = value
+        }
+    }
+
+    /// 大标题下面的控制条。宽度够时在分段筛选右侧放搜索；
+    /// 窄屏优先保留筛选，和追番页一样用 ViewThatFits 自动让位。
+    @ViewBuilder
+    private var controlBar: some View {
+        if isSearching {
+            searchRow
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    filterPicker
+                    Spacer(minLength: 0)
+                    searchButton
+                }
+                filterPicker
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
+        }
+    }
+
+    private var filterPicker: some View {
+        Picker("排序与筛选", selection: $selectedFilter) {
+            ForEach(PluginShopFilter.allCases) { filter in
+                Text(filter.title).tag(filter)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 210)
+    }
+
+    private var searchButton: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.32)) { isSearching = true }
+            searchFocused = true
+        } label: {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 44, height: 36)
+                .contentShape(Rectangle())
+                .kazumiGlassCapsule(interactive: true)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("搜索规则")
+    }
+
+    private var searchRow: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(Color.secondary)
+                TextField("搜索规则", text: $query)
+                    .font(.subheadline)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Color.secondary)
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清空搜索")
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            .frame(maxWidth: .infinity)
+            .kazumiGlassCapsule()
+            .frame(minHeight: 44)
+
+            Button("取消") {
+                query = ""
+                searchFocused = false
+                withAnimation(.smooth(duration: 0.32)) { isSearching = false }
+            }
+            .font(.subheadline)
+            .foregroundStyle(Color.primary)
+            .buttonStyle(.plain)
+            .frame(minHeight: 44)
+        }
+        .frame(minHeight: 44)
+        .animation(.smooth(duration: 0.32), value: isSearching)
     }
 
     private func refresh(force: Bool) async {
@@ -148,6 +301,23 @@ struct PluginShopView: View {
             try? await Task.sleep(for: .seconds(2))
             withAnimation(.snappy) { toast = nil }
         }
+    }
+}
+
+/// 规则条目元数据的「图标＋文字」原子组：组内 3 点，组间由外层统一留更大的间距。
+/// 不用系统 Label 的默认布局，避免版本号或日期视觉上贴到隔壁图标。
+struct RuleMetadataLabel: View {
+    let text: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .accessibilityHidden(true)
+            Text(text)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(text))
     }
 }
 
@@ -190,12 +360,12 @@ private struct PluginCatalogRow: View {
                 }
                 let metaLayout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                    : AnyLayout(HStackLayout(spacing: 10))
+                    : AnyLayout(HStackLayout(spacing: 12))
                 metaLayout {
                     Text(item.author)
-                    Label(item.version, systemImage: "tag")
+                    RuleMetadataLabel(text: item.version, systemImage: "tag")
                     if let updated = item.updatedDateText {
-                        Label(updated, systemImage: "clock")
+                        RuleMetadataLabel(text: updated, systemImage: "clock")
                     }
                 }
                 .font(.caption)
