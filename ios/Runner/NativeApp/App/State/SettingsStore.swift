@@ -308,6 +308,8 @@ enum SettingsKey {
     static let syncPlayEndPoint = "syncPlayEndPoint"
     static let syncPlayRoom = "syncPlayRoom"
     static let syncPlayPassword = "syncPlayPassword"
+    /// 上次成功连接的 DLNA 描述地址（IP 或 IP:端口），用于下次手动连接预填与设置备份。
+    static let lastDLNAAddress = "lastDLNAAddress"
 }
 
 /// 可观察的设置存储。所有写入立即同步到磁盘，避免进程被系统回收后丢设置。
@@ -843,6 +845,11 @@ final class SettingsStore {
         didSet { persist(syncPlayPassword, SettingsKey.syncPlayPassword) }
     }
 
+    /// 上次实际投屏成功的 DLNA 地址；不是凭据，会跟随设置备份迁移。
+    var lastDLNAAddress: String {
+        didSet { persist(lastDLNAAddress, SettingsKey.lastDLNAAddress) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // 旧版 Swift 键 -> Flutter 键的一次性迁移。只在目标键从未写过时复制，
@@ -1015,6 +1022,7 @@ final class SettingsStore {
         syncPlayEndPoint = Self.read(defaults, SettingsKey.syncPlayEndPoint, "")
         syncPlayRoom = Self.read(defaults, SettingsKey.syncPlayRoom, "")
         syncPlayPassword = Self.read(defaults, SettingsKey.syncPlayPassword, "")
+        lastDLNAAddress = Self.read(defaults, SettingsKey.lastDLNAAddress, "")
         // 加速方式在全部存储属性初始化完成后再同步到全局开关。
         BangumiAcceleration.mode = enableBangumiProxy ? .mirror : .direct
         // 网络那几项同样要补一次：init 里赋初值不触发 didSet，

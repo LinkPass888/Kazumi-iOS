@@ -30,7 +30,7 @@ final class PictureInPictureController: NSObject {
         case settled(Int)
     }
 
-    private let hostView = PiPHostView()
+    private var hostView = PiPHostView()
     private var pipController: AVPictureInPictureController?
     private var copier: PiPFrameCopier?
     private weak var surface: PlayerSurfaceModel?
@@ -110,7 +110,30 @@ final class PictureInPictureController: NSObject {
             log("prepare result=\(result) background=\(background) sourceReady=\(pipController?.contentSource != nil && copier != nil && hostView.window != nil) copyReady=\(copier != nil) cadence=\(captureCadence.map { String(format: "%.6f", $0) } ?? "off")")
         }
         if hasOngoingPictureInPicture {
-            result = self.engine === engine ? "同引擎沿用活动周期/节拍/资格" : "过渡中保留原内容源"
+            // 活动小窗期间换集：surface/engine 必须跟上，否则代理回调仍按
+            // 上一集的时长作答，copier 也还绑在已停止的旧引擎上（小窗冻结）。
+            self.surface = surface
+            contentIsPrimaryAndPlaying = surface.isPlaying
+            let engineChanged = copier.map { $0.engine !== engine } ?? false
+            let transitioning: Bool
+            switch phase {
+            case .starting, .restoring:
+                transitioning = true
+            default:
+                transitioning = false
+            }
+            if engineChanged, !transitioning, let engine, engine.handle != nil {
+                self.engine?.setPictureInPictureFrameFeedActive(false)
+                self.engine = engine
+                copier?.retarget(engine: engine)
+                engine.setPictureInPictureFrameFeedActive(true)
+                engine.requestRender()
+                // 换集后时长/进度都变了，让系统重读一遍，避免小窗进度条停在上一集。
+                pipController?.invalidatePlaybackState()
+                result = "活动小窗换引擎改绑"
+            } else {
+                result = self.engine === engine ? "同引擎沿用活动周期/节拍/资格" : "过渡中保留原内容源"
+            }
             return
         }
         self.surface = surface
@@ -122,9 +145,14 @@ final class PictureInPictureController: NSObject {
         contentIsPrimaryAndPlaying = surface.isPlaying
         guard ensureController(), attachHostIfNeeded() else { return }
 
-        if let copier, copier.engine !== engine {
-            copier.teardown()
-            self.copier = nil
+        let engineChanged = copier.map { $0.engine !== engine } ?? false
+        if let copier, engineChanged {
+            // AVSampleBufferRenderSynchronizer 不允许把同一个 renderer 再加到
+            // 另一个同步器上。换集时驱动器复用同一个 hostView/displayLayer，
+            // 因此这里只能把现有 copier 改绑到新引擎，绝不能 teardown 后重建：
+            // 重建会在 init 里对同一个 renderer 再 addRenderer，直接抛
+            // NSInvalidArgumentException 崩溃（真机 3.0.2 自动连播复现）。
+            copier.retarget(engine: engine)
         }
         let alreadyPrepared = copier != nil && captureTimer != nil
         if copier == nil {
@@ -135,11 +163,11 @@ final class PictureInPictureController: NSObject {
         }
         setCaptureCadence(0.5, reason: "内联低频")
         refreshAutomaticStart(reason: "内容源已准备")
-        if !alreadyPrepared {
+        if !alreadyPrepared || engineChanged {
             copier?.driveSynchronizer(engine: engine)
             engine.requestRender()
         }
-        result = alreadyPrepared ? "inline幂等复用" : "内容源已建立"
+        result = alreadyPrepared ? (engineChanged ? "inline换引擎复用" : "inline幂等复用") : "内容源已建立"
     }
 
     /// Forwarded exactly once for a real scene background transition.
@@ -272,6 +300,9 @@ final class PictureInPictureController: NSObject {
         copier?.teardown()
         copier = nil
         hostView.removeFromSuperview()
+        // renderer 无法安全从旧 synchronizer 上摘下来；换一块新宿主视图，
+        // 下次 prepare 拿到的是全新的 displayLayer/renderer，避免重复 addRenderer。
+        hostView = PiPHostView()
         isActive = false
         phase = .inline
         pendingControllerStop = false
@@ -1051,6 +1082,9 @@ private final class PiPFrameCopier {
     private(set) var isCapturing = false
 
     private var formatDescription: CMVideoFormatDescription?
+    private var formatWidth = 0
+    private var formatHeight = 0
+    private var formatPixelFormat: OSType = 0
     private var lastPTS = Double.nan
     private var lastEnqueuedHostTime: CFTimeInterval?
     private var lastCaptureHostTime: CFTimeInterval = 0
@@ -1076,6 +1110,27 @@ private final class PiPFrameCopier {
 
     var lastEnqueuedFrameAge: Double? {
         lastEnqueuedHostTime.map { CACurrentMediaTime() - $0 }
+    }
+
+    /// 换集时复用同一个 renderer/同步器，只把取帧来源改到新引擎。
+    /// 不能重建 copier：displayLayer 的 sampleBufferRenderer 已经在当前
+    /// synchronizer 上，重复 addRenderer 会抛异常。
+    func retarget(engine: MPVEngine) {
+        guard self.engine !== engine else { return }
+        captureGeneration += 1
+        captureTask?.cancel()
+        captureTask = nil
+        renderer.flush()
+        formatDescription = nil
+        formatWidth = 0
+        formatHeight = 0
+        formatPixelFormat = 0
+        lastPTS = .nan
+        lastEnqueuedHostTime = nil
+        didLogFirstFrame = false
+        didLogFailure = false
+        self.engine = engine
+        driveSynchronizer(engine: engine)
     }
 
     func driveSynchronizer(engine: MPVEngine?) {
@@ -1143,6 +1198,9 @@ private final class PiPFrameCopier {
         // The synchronizer owns this renderer for the copier's lifetime. Do not
         // detach on iOS 26: removeRenderer requires an asynchronous completion.
         formatDescription = nil
+        formatWidth = 0
+        formatHeight = 0
+        formatPixelFormat = 0
         lastEnqueuedHostTime = nil
     }
 
@@ -1221,6 +1279,24 @@ private final class PiPFrameCopier {
             logFeedEvent("断帧：转缓冲失败，保持时基", frame: frame)
             return
         }
+        // 同一条播放内核里分辨率或像素格式变了：旧 formatDescription 不能再用，
+        // 否则每帧 CMSampleBufferCreateReadyWithImageBuffer 都会失败，小窗永久冻住。
+        let pixelWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let pixelHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        if formatDescription != nil,
+           formatWidth > 0,
+           (formatWidth != pixelWidth
+            || formatHeight != pixelHeight
+            || formatPixelFormat != pixelFormat) {
+            formatDescription = nil
+            formatWidth = 0
+            formatHeight = 0
+            formatPixelFormat = 0
+            renderer.flush()
+            lastPTS = .nan
+            logFeedEvent("尺寸或像素格式变化 → 重建 formatDescription", frame: frame)
+        }
         guard let sampleBuffer = makeSampleBuffer(pixelBuffer: pixelBuffer, presentationTime: pts) else {
             captureCounts["sample-failure", default: 0] += 1
             logOnce("CMSampleBuffer 创建失败")
@@ -1273,6 +1349,9 @@ private final class PiPFrameCopier {
             )
             guard status == noErr, let description else { return nil }
             formatDescription = description
+            formatWidth = CVPixelBufferGetWidth(pixelBuffer)
+            formatHeight = CVPixelBufferGetHeight(pixelBuffer)
+            formatPixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
         }
         guard let formatDescription else { return nil }
         var timing = CMSampleTimingInfo(

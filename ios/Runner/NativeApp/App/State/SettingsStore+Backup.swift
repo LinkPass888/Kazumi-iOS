@@ -140,6 +140,7 @@ extension SettingsStore {
             SettingsKey.webDavEnableHistory,
             SettingsKey.webDavEnableCollect,
             SettingsKey.webDavEnableDanmakuShield,
+            SettingsKey.lastDLNAAddress,
         ]
         for (local, legacy) in legacyKeys {
             keys.insert(local)
@@ -195,6 +196,7 @@ extension SettingsStore {
             (SettingsKey.webDavEnableCollect, .bool(webDavEnableCollect)),
             (SettingsKey.webDavEnableDanmakuShield, .bool(webDavEnableDanmakuShield)),
             (SettingsKey.proxyEnabled, .bool(proxyEnabled)),
+            (SettingsKey.lastDLNAAddress, .string(lastDLNAAddress)),
         ]
         if !omitCredentials {
             pairs += [
@@ -497,6 +499,10 @@ extension SettingsStore {
         }
         if let text = value(SettingsKey.danmakuAPIRequestHeaders)?.stringValue {
             danmakuAPIRequestHeaders = text
+            restored += 1
+        }
+        if let text = value(SettingsKey.lastDLNAAddress)?.stringValue {
+            lastDLNAAddress = text
             restored += 1
         }
         // 未被上面任何属性接收的键整段写回（原版恢复备份就是整段覆盖设置箱）。

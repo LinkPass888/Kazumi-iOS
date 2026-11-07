@@ -11,8 +11,40 @@ import Foundation
 import os
 
 enum KazumiEndpoints {
-    /// 规则仓库。
-    static let pluginShop = "https://raw.githubusercontent.com/Predidit/KazumiRules/main/"
+    static let officialPluginShop = "https://raw.githubusercontent.com/Predidit/KazumiRules/main/"
+    private static let customPluginShopKey = "customRulesRepositoryURL"
+
+    static var customPluginShop: String? {
+        let value = UserDefaults.standard.string(forKey: customPluginShopKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    static var pluginShop: String {
+        guard let customPluginShop,
+              let url = URL(string: customPluginShop) else { return officialPluginShop }
+        if url.pathExtension.lowercased() == "json" {
+            let root = url.deletingLastPathComponent().absoluteString
+            return root.hasSuffix("/") ? root : root + "/"
+        }
+        return url.absoluteString.hasSuffix("/") ? url.absoluteString : url.absoluteString + "/"
+    }
+
+    static var pluginShopIndex: String {
+        guard let customPluginShop,
+              let url = URL(string: customPluginShop) else { return officialPluginShop + "index.json" }
+        return url.pathExtension.lowercased() == "json"
+            ? url.absoluteString
+            : url.appendingPathComponent("index.json").absoluteString
+    }
+
+    static func setCustomPluginShop(_ value: String?) {
+        if let value, !value.isEmpty {
+            UserDefaults.standard.set(value, forKey: customPluginShopKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: customPluginShopKey)
+        }
+    }
 
     /// 规则仓库镜像。gh-proxy 和 ghfast 是「前缀 + 完整原地址」，
     /// GitCode 是「换掉域名后那段」。
@@ -98,8 +130,8 @@ final class RulesRepoClient: Sendable {
     /// 按指定镜像改写；测速也走这里，保证测的就是实际会用的地址。
     static func mirrored(_ url: String, mirror: RulesMirror) -> String {
         guard mirror != .direct,
-              url.hasPrefix(KazumiEndpoints.pluginShop) else { return url }
-        let path = url.dropFirst(KazumiEndpoints.pluginShop.count)
+              url.hasPrefix(KazumiEndpoints.officialPluginShop) else { return url }
+        let path = url.dropFirst(KazumiEndpoints.officialPluginShop.count)
         switch mirror {
         case .ghProxy: return KazumiEndpoints.ghProxyMirror + url
         case .ghfast: return KazumiEndpoints.ghfastMirror + url
@@ -110,7 +142,7 @@ final class RulesRepoClient: Sendable {
 
     /// 测这条镜像通不通、往返多少毫秒：只取规则列表文件的开头，3 秒不上就算不通。
     func measureLatency(for mirror: RulesMirror) async -> Int? {
-        let urlString = Self.mirrored(KazumiEndpoints.pluginShop + "index.json", mirror: mirror)
+        let urlString = Self.mirrored(KazumiEndpoints.officialPluginShop + "index.json", mirror: mirror)
         guard let url = URL(string: urlString) else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"

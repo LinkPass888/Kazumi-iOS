@@ -408,12 +408,15 @@ struct PluginListView: View {
             if isEditingSelection {
                 // 编辑态三颗的顺序（LP 定）：最左全选、中间删除、最右完成。
                 let allSelected = selection.count == plugins.pluginList.count
-                Button(allSelected ? "取消全选" : "全选") {
+                Button {
                     if allSelected {
                         selection.removeAll()
                     } else {
                         selection = Set(plugins.pluginList.map(\.name))
                     }
+                } label: {
+                    Text(allSelected ? String(localized: "取消全选") : String(localized: "全选"))
+                        .foregroundStyle(Color.primary)
                 }
             }
         }
@@ -425,9 +428,12 @@ struct PluginListView: View {
                     pendingBatchDeletion = true
                 }
                 .disabled(selection.isEmpty)
-                Button("完成") {
+                Button {
                     isEditingSelection = false
                     selection.removeAll()
+                } label: {
+                    Text("完成")
+                        .foregroundStyle(Color.primary)
                 }
             } else {
                 // 菜单去掉：批量编辑单独一颗圆按钮；更新规则的动作在下面那排胶囊里。
@@ -435,6 +441,11 @@ struct PluginListView: View {
                     isEditingSelection = true
                 } label: {
                     Image(systemName: "checkmark.circle")
+                        .foregroundStyle(
+                            plugins.pluginList.isEmpty
+                                ? KazumiPalette.tertiaryText(for: colorScheme)
+                                : Color.primary
+                        )
                 }
                 .disabled(plugins.pluginList.isEmpty)
                 .accessibilityLabel("批量编辑")
@@ -653,12 +664,21 @@ private struct PluginRowView: View {
                 // 版本号被挤成「.6」。辅助功能字号下改成竖排，每颗一行。
                 let metaLayout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                    : AnyLayout(HStackLayout(spacing: 10))
+                    : AnyLayout(HStackLayout(spacing: 12))
                 metaLayout {
-                    Label(plugin.version.isEmpty ? "-" : plugin.version, systemImage: "tag")
-                    Label(plugin.searchMode == .api ? "API" : "XPath", systemImage: plugin.searchMode == .api ? "curlybraces" : "chevron.left.forwardslash.chevron.right")
+                    RuleMetadataLabel(
+                        text: plugin.version.isEmpty ? "-" : plugin.version,
+                        systemImage: "tag"
+                    )
+                    RuleMetadataLabel(
+                        text: plugin.searchMode == .api ? "API" : "XPath",
+                        systemImage: plugin.searchMode == .api ? "curlybraces" : "chevron.left.forwardslash.chevron.right"
+                    )
                     if plugin.antiCrawlerConfig.enabled {
-                        Label("验证", systemImage: "checkmark.shield")
+                        RuleMetadataLabel(
+                            text: String(localized: "验证"),
+                            systemImage: "checkmark.shield"
+                        )
                     }
                 }
                 .font(.caption)

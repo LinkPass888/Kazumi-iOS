@@ -70,6 +70,10 @@ final class PlayerController {
     private var cancelToken = RuleCancelToken()
     /// 解析的看门狗：页面加载完却一直没拿到地址时，别让圈一直转（LP 5465）。
     private var parseWatchdog: Task<Void, Never>?
+    /// 第几次起播：换集 / 重试时自增，旧的章节请求和解析结果一律丢掉。
+    private var startGeneration = 0
+    /// 当前这次 WebView 解析的代号，和 `VideoParserEvent.loadID` 对齐。
+    private var activeParseLoadID = 0
 
     /// 上次走的线路（历史里记的），以及这次进播放器是不是「接着看」。
     private var resumeRoad: Int?
@@ -125,12 +129,20 @@ final class PlayerController {
 
     /// 播放该集：先抓章节（只做一次），再解析媒体地址。
     func start() async {
+        startGeneration &+= 1
+        let generation = startGeneration
+        // 新一次起播还没拿到新的 loadID 之前，先把旧代号置空，旧页面的回调一律丢掉。
+        activeParseLoadID = -1
+        // 上一次还在跑的章节 / 搜索请求先取消；WebView 由新的 load() 换页。
+        cancelToken.cancel()
+        cancelToken = RuleCancelToken()
         // 新的一次加载：WebView 可能要再用（换集 / 重试），放开「已释放」这个记号。
         didReleaseWebView = false
         // 从观看历史进入时路由只带 bangumiID / 集数，没有播放源；
         // 先按历史里的规则名把播放源重建出来，再走正常的起播流程。
         if source == nil {
             await resolveSourceFromHistory()
+            guard generation == startGeneration else { return }
         }
         guard let source else {
             phase = .failed(String(localized: "没找到这部剧的播放源"))
@@ -140,6 +152,7 @@ final class PlayerController {
             phase = .failed(String(localized: "规则「\(String(describing: source.pluginName))」已不存在，请重新选择"))
             return
         }
+        guard generation == startGeneration else { return }
 
         // 本集加进了下载但还没下完（Camo 5208）：这一轮要走在线解析，
         // 画面得说一句。本地文件能用时下面会把它收掉。
@@ -164,6 +177,7 @@ final class PlayerController {
                     source: source.detailURL,
                     cancelToken: cancelToken
                 )
+                guard generation == startGeneration else { return }
                 roads = trace.roads
                 applyStartPoint(roads: trace.roads)
                 if episodes.isEmpty {
@@ -172,6 +186,7 @@ final class PlayerController {
                     return
                 }
             } catch {
+                guard generation == startGeneration else { return }
                 // 抓不到章节（片源挂了、地址变了）时，只要本地有这一集的文件，
                 // 照样能放——离线播放不能因为在线那头坏了就跟着废掉。
                 if let local = localFile?(currentEpisode) {
@@ -210,6 +225,7 @@ final class PlayerController {
             failed(String(localized: "该集没有播放地址"))
             return
         }
+        guard generation == startGeneration else { return }
 
         applyHeaders(plugin: plugin)
         // 本地已经下好了就用本地那份：不解析、不走网页，画质也稳定（Colo 5174）。
@@ -225,7 +241,9 @@ final class PlayerController {
         // 登录态交给解析页（LP 5450）：页面里那一步拿地址要登录，
         // 这个 WebView 原先是一次性会话，Cookie 到不了，就一直卡在解析。
         webView.configureSession(pluginName: plugin.name, url: target)
-        await webView.load(url: target, useLegacyParser: plugin.useLegacyParser)
+        let loadID = await webView.load(url: target, useLegacyParser: plugin.useLegacyParser)
+        guard generation == startGeneration else { return }
+        activeParseLoadID = loadID
     }
 
     /// 进播放页定「从第几集、第几条线路起」（对应 main `video_page._initOnlineMode`）。
@@ -321,6 +339,8 @@ final class PlayerController {
     }
 
     func stop() {
+        startGeneration &+= 1
+        activeParseLoadID = 0
         parseWatchdog?.cancel()
         parseWatchdog = nil
         cancelToken.cancel()
@@ -441,6 +461,9 @@ final class PlayerController {
 
     private func handleParsedMedia(_ event: VideoParserEvent) {
         guard !event.url.isEmpty else { return }
+        // 换集 / 重试后旧页面迟到的回调：代号对不上，不能拿它去起播。
+        guard event.loadID == activeParseLoadID else { return }
+        guard case .parsingMedia = phase else { return }
         parseWatchdog?.cancel()
         parseWatchdog = nil
         isEpisodeIncomplete = false

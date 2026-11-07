@@ -78,7 +78,9 @@ struct ProfileScreen: View {
                     router.push(.settings)
                 } label: {
                     // LP 2026-10-25：右上角是设置入口，用齿轮符号。
+                    // 跟返回按钮一样走标签色，不用主题色。
                     Image(systemName: "gearshape")
+                        .foregroundStyle(Color.primary)
                 }
                 .accessibilityLabel("全部设置")
             }

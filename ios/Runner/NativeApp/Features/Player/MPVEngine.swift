@@ -152,11 +152,39 @@ final class MPVEngine {
     /// 内核已经在跑的时候改这一项不会重开文件，只影响后面还要读多少——
     /// 缓冲被打空的当下改小也会立刻生效，所以「移动数据→低内存」不用重开这一集。
     func applyCacheSize(_ bytes: Int) {
+        // SwiftUI 每次刷新都会把这一项重新算一遍；值没变就别再打 mpv 属性。
+        // 以前每 250ms 重设一次 demuxer 缓存，慢源上会被反复打断，表现就是卡顿。
+        guard bytes != cacheBytes else { return }
         cacheBytes = bytes
         guard let mpv = handle else { return }
         let value = String(bytes)
         mpv_set_property_string(mpv, "demuxer-max-bytes", value)
         mpv_set_property_string(mpv, "demuxer-max-back-bytes", value)
+        mpv_set_property_string(mpv, "demuxer-readahead-secs", readAheadSeconds(for: bytes))
+        mpv_set_property_string(mpv, "cache-secs", cacheSeconds())
+    }
+
+    /// 起播阶段只放 1 秒的预取窗口，首帧出来后再恢复长缓存。
+    ///
+    /// 慢源上直接把 `cache-secs` / 预读设成几万秒，会让「先填一大段缓存」和
+    /// 「网速只有几百 KB/s」叠在一起，加载圈看起来一直不走；先让解码器拿到
+    /// 1 秒数据出画面，再补后面的窗口。
+    private func readAheadSeconds(for bytes: Int) -> String {
+        guard bytes > PlaybackCachePolicy.lowMemoryBytes else { return "1" }
+        return reportedFirstFrame ? "5" : "1"
+    }
+
+    /// `cache-secs` 会覆盖 `demuxer-readahead-secs`，起播时也要一起压低，
+    /// 否则只改后者等于没改。
+    private func cacheSeconds() -> String {
+        reportedFirstFrame ? "36000" : "1"
+    }
+
+    /// 首帧之后才提高预取。低内存档的 readahead 仍保持 1 秒，不拿内存换平滑。
+    private func promoteCacheAfterFirstFrame() {
+        setOptionForPlayback("cache-secs", "36000")
+        guard cacheBytes > PlaybackCachePolicy.lowMemoryBytes else { return }
+        setOptionForPlayback("demuxer-readahead-secs", "5")
     }
 
     private var lastSnapshot = MPVSnapshot(
@@ -259,8 +287,8 @@ final class MPVEngine {
         setOption("demuxer-max-back-bytes", String(cacheBytes))
         // main 的网络预取窗口。1500 MiB 只限制内存上限，时间窗口仍要足够长；
         // 3x 播放时默认窗口会很快耗尽，表现成频繁 core-idle。
-        setOption("cache-secs", "36000")
-        setOption("demuxer-readahead-secs", "1")
+        setOption("cache-secs", cacheSeconds())
+        setOption("demuxer-readahead-secs", readAheadSeconds(for: cacheBytes))
 
         let initStatus = mpv_initialize(mpv)
         guard initStatus >= 0 else {
@@ -329,6 +357,7 @@ final class MPVEngine {
         if snapshot.hasVideo, !reportedFirstFrame {
             reportedFirstFrame = true
             pump?.markFirstFrameRendered()
+            promoteCacheAfterFirstFrame()
             onFirstFrame?()
         }
     }
@@ -425,7 +454,9 @@ final class MPVEngine {
     private var usesFallbackVideoOutputList = false
 
     func reconfigureVideoOutputForSurfaceResize() {
-        guard handle != nil, lastSnapshot.hasVideo, !renderingLocked else { return }
+        // 换集后 reportedFirstFrame 会先归零；旧一集的 hasVideo 还在时不要
+        // 在加载途中重建 VO，否则转屏会拿旧画面尺寸去撑新窗口。
+        guard handle != nil, lastSnapshot.hasVideo, reportedFirstFrame, !renderingLocked else { return }
         usesFallbackVideoOutputList.toggle()
         setOptionForPlayback(
             "options/vo",
@@ -1454,21 +1485,22 @@ final class MPVEventPump: @unchecked Sendable {
 
     /// 当前的下载速度（字节/秒）。
     ///
-    /// 先问 `cache-speed`：它就是「demuxer 缓存正在被填多快」。个别内核版本这个
-    /// 属性是空的，再退回 `demuxer-cache-state` 里的 `raw-input-rate`
-    /// （mpv 的 node map 支持按子键取值，直接拿字符串再转数最省事）。
-    /// 两个都拿不到就是 0：界面上不显示网速，不留一个「0 KB/s」在那儿。
+    /// 先问 `demuxer-cache-state/raw-input-rate`：它是网络输入这一拍的原始速率，
+    /// 会跟着源站限速上下变；`cache-speed` 更像缓存的平均填充速度，慢源上容易
+    /// 长时间停在同一个数字（「554 KB/s 不动」就是这么来的）。
+    /// `raw-input-rate` 个别内核版本没有值，再退回 `cache-speed`。
+    /// 两个都拿不到就是 0：界面上不显示网速。
     private func downloadSpeed() -> Double {
+        if let raw = mpv_get_property_string(mpv, "demuxer-cache-state/raw-input-rate") {
+            defer { mpv_free(raw) }
+            let value = Double(String(cString: raw)) ?? 0
+            if value.isFinite, value > 0 { return value }
+        }
         var speed = Double(0)
         if mpv_get_property(mpv, "cache-speed", MPV_FORMAT_DOUBLE, &speed) >= 0,
            speed.isFinite, speed > 0 {
             return speed
         }
-        guard let raw = mpv_get_property_string(mpv, "demuxer-cache-state/raw-input-rate") else {
-            return 0
-        }
-        defer { mpv_free(raw) }
-        let value = Double(String(cString: raw)) ?? 0
-        return value.isFinite && value > 0 ? value : 0
+        return 0
     }
 }

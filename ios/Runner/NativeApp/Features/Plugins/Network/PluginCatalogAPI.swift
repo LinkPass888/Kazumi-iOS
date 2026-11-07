@@ -16,7 +16,7 @@ struct PluginCatalogAPI: Sendable {
 
     /// 对应 getPluginList：解析成功的条目之外，跳过数量会写入日志。
     func getPluginList() async throws -> [PluginHTTPItem] {
-        let raw = try await client.getText(KazumiEndpoints.pluginShop + "index.json")
+        let raw = try await client.getText(KazumiEndpoints.pluginShopIndex)
         let result = try PluginCatalogParser.parse(raw)
         if result.skippedItems > 0 {
             KazumiLog.plugin.warning("Plugin: skipped \(result.skippedItems) invalid rule catalog item(s)")

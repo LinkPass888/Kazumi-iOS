@@ -13,6 +13,7 @@
 //   * 透明度 / 字号 / 显示区域（屏幕高度占比）来自弹幕设置。
 //
 
+import CoreText
 import QuartzCore
 import UIKit
 
@@ -24,6 +25,77 @@ final class DanmakuOverlayView: UIView {
         var lane: Int = 0
         var mode: Int = 1
         var baseY: CGFloat = .nan
+        /// 描边宽度（pt）。0 表示不描边。
+        var outlineWidth: CGFloat = 0
+
+        override func drawText(in rect: CGRect) {
+            guard outlineWidth > 0,
+                  let attributedText,
+                  let context = UIGraphicsGetCurrentContext() else {
+                super.drawText(in: rect)
+                return
+            }
+
+            // 只生成一条 CTLine，让描边与填充复用完全相同的字形和位置。
+            // 必须先移除 run 自带的 `.foregroundColor`，否则它会覆盖 CGContext
+            // 的黑色 stroke；实际颜色改由 context 在两次绘制前分别提供。
+            let fillColor = attributedText.attribute(
+                .foregroundColor,
+                at: 0,
+                effectiveRange: nil
+            ) as? UIColor ?? .white
+            let drawString = NSMutableAttributedString(attributedString: attributedText)
+            let fullRange = NSRange(location: 0, length: drawString.length)
+            drawString.removeAttribute(.foregroundColor, range: fullRange)
+            drawString.addAttribute(
+                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String),
+                value: true,
+                range: fullRange
+            )
+            let line = CTLineCreateWithAttributedString(drawString as CFAttributedString)
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            var leading: CGFloat = 0
+            let lineWidth = CGFloat(
+                CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+            )
+            let lineHeight = ascent + descent + leading
+            // 仿 canvas_danmaku 的两次 drawParagraph：相同排版、相同基线，
+            // 先用 CGContext 的 .stroke 模式画黑边，再用 .fill 盖原色实心字。
+            let x = (rect.width - lineWidth) / 2
+            let baseline = (rect.height - lineHeight) / 2 + descent + leading / 2
+
+            context.saveGState()
+            context.textMatrix = .identity
+            // UIView 的上下文是左上原点、y 向下；CoreText 要左下原点、y 向上。
+            context.translateBy(x: rect.origin.x, y: rect.origin.y + rect.height)
+            context.scaleBy(x: 1, y: -1)
+            let textOrigin = CGPoint(x: x, y: baseline)
+            context.setLineWidth(outlineWidth)
+            // 与 canvas_danmaku 的默认 Paint 一致：miter join、butt cap、miterLimit 4。
+            context.setLineJoin(.miter)
+            context.setLineCap(.butt)
+            context.setMiterLimit(4)
+
+            // CTLineDraw 允许改动 CGContext 状态。每一遍都用独立 graphics state，
+            // 并显式重置 textMatrix / textPosition，保证 fill 与 stroke 严格同位。
+            context.saveGState()
+            context.textMatrix = .identity
+            context.setTextDrawingMode(.stroke)
+            context.setStrokeColor(UIColor.black.cgColor)
+            context.textPosition = textOrigin
+            CTLineDraw(line, context)
+            context.restoreGState()
+
+            context.saveGState()
+            context.textMatrix = .identity
+            context.setTextDrawingMode(.fill)
+            context.setFillColor(fillColor.cgColor)
+            context.textPosition = textOrigin
+            CTLineDraw(line, context)
+            context.restoreGState()
+            context.restoreGState()
+        }
     }
 
     private var comments: [DanmakuComment] = []
@@ -327,19 +399,23 @@ final class DanmakuOverlayView: UIView {
 
         let label = ItemLabel()
         let size = max(10, min(48, style.fontSize))
+        let font = UIFont.systemFont(ofSize: size, weight: Self.weight(style.fontWeight))
         // 关掉「弹幕颜色」就一律白字（main 的 danmakuColor）。
-        label.text = comment.text
-        label.font = .systemFont(ofSize: size, weight: Self.weight(style.fontWeight))
-        label.textColor = style.useColor ? Self.color(comment.colorValue) : .white
-        if style.border {
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.9
-            label.layer.shadowRadius = CGFloat(max(0.5, min(3, style.borderSize)))
-        } else {
-            label.layer.shadowOpacity = 0
-            label.layer.shadowRadius = 0
-        }
-        label.layer.shadowOffset = .zero
+        let textColor = style.useColor ? Self.color(comment.colorValue) : UIColor.white
+        let border = style.border ? max(0, min(3, style.borderSize)) : 0
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+        // 填充字和描边用同一套排版，`drawText` 里再用同一个 CTLine 画两遍。
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraph
+        ]
+        label.attributedText = NSAttributedString(string: comment.text, attributes: attributes)
+        // 直接用 pt，跟 canvas_danmaku 的 `Paint.strokeWidth` 一样；不再折算成
+        // NSStrokeWidth 的字体百分比，避免两套排版把描边挤成斜向偏移。
+        label.outlineWidth = CGFloat(border)
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byClipping
@@ -353,8 +429,10 @@ final class DanmakuOverlayView: UIView {
         let fitted = label.sizeThatFits(
             CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         )
-        let width = ceil(fitted.width) + 4
-        let height = ceil(fitted.height) + 2
+        // 描边会向字形轮廓外扩，sizeThatFits 不算这笔；按粗细留边，免得笔画被裁掉。
+        let edgePadding = max(4, ceil(CGFloat(border) * 2) + 2)
+        let width = ceil(fitted.width) + edgePadding
+        let height = ceil(fitted.height) + edgePadding
         label.bounds = CGRect(origin: .zero, size: CGSize(width: width, height: height))
         label.layer.shouldRasterize = true
         label.layer.rasterizationScale = currentScreenScale

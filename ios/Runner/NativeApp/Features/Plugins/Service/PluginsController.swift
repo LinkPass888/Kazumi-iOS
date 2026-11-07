@@ -77,6 +77,7 @@ final class PluginsController {
 
     private var catalogByName: [String: PluginHTTPItem] = [:]
     private var catalogRefreshedAt: Date?
+    private var catalogSource: String?
     private var isRefreshInFlight = false
 
     private let fileURL: URL
@@ -179,7 +180,8 @@ final class PluginsController {
     }
 
     var isCatalogFresh: Bool {
-        guard let refreshedAt = catalogRefreshedAt else { return false }
+        guard catalogSource == KazumiEndpoints.pluginShopIndex,
+              let refreshedAt = catalogRefreshedAt else { return false }
         return Date().timeIntervalSince(refreshedAt) < Self.catalogMaxAge
     }
 
@@ -329,24 +331,33 @@ final class PluginsController {
 
     func refreshPluginCatalog() async throws -> [PluginHTTPItem] {
         if isRefreshInFlight {
-            // 单飞：复用正在进行中的刷新结果。
+            // 单飞：仓库没变就复用；仓库变了则等旧请求结束后再拉新地址。
             while isRefreshInFlight {
                 try await Task.sleep(for: .milliseconds(50))
             }
-            return pluginHTTPList
+            if catalogSource == KazumiEndpoints.pluginShopIndex {
+                return pluginHTTPList
+            }
+            return try await refreshPluginCatalog()
         }
+        let source = KazumiEndpoints.pluginShopIndex
         isRefreshInFlight = true
-        defer { isRefreshInFlight = false }
         do {
             let catalog = try await catalogLoader()
+            isRefreshInFlight = false
+            guard source == KazumiEndpoints.pluginShopIndex else {
+                return try await refreshPluginCatalog()
+            }
             catalogByName = Dictionary(
                 catalog.map { (pluginNameKey($0.name), $0) },
                 uniquingKeysWith: { _, latest in latest }
             )
             pluginHTTPList = catalog
             catalogRefreshedAt = Date()
+            catalogSource = source
             return catalog
         } catch {
+            isRefreshInFlight = false
             errorReporter("Plugin: failed to refresh rule catalog", error)
             throw error
         }

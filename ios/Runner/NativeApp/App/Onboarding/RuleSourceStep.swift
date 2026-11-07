@@ -289,13 +289,20 @@ struct RuleSourceStep: View {
     }
 
     /// 跟 App 内规则仓库那屏同一套写法：标签图标＋版本号，时钟图标＋更新时间。
+    /// 「验证」跟规则管理页一样把符号和文字放在版本号这一行，颜色同为次要色。
     /// 窄屏放不下时退回纯文字「1.2 · 8月10日」，不截断也不缩字号。
     private func detailRow(_ item: PluginHTTPItem) -> some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                Label(item.version, systemImage: "tag")
+            HStack(spacing: 12) {
+                RuleMetadataLabel(text: item.version, systemImage: "tag")
                 if let updated = item.updatedDateText {
-                    Label(updated, systemImage: "clock")
+                    RuleMetadataLabel(text: updated, systemImage: "clock")
+                }
+                if item.antiCrawlerEnabled {
+                    RuleMetadataLabel(
+                        text: String(localized: "验证"),
+                        systemImage: "checkmark.shield"
+                    )
                 }
             }
             .fixedSize()
@@ -303,11 +310,18 @@ struct RuleSourceStep: View {
             Text(plainDetail(item))
                 .fixedSize()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func plainDetail(_ item: PluginHTTPItem) -> String {
-        guard let date = item.updatedDateText else { return item.version }
-        return "\(item.version) · \(date)"
+        var parts = [item.version]
+        if let date = item.updatedDateText {
+            parts.append(date)
+        }
+        if item.antiCrawlerEnabled {
+            parts.append(String(localized: "验证"))
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func load(force: Bool) async {

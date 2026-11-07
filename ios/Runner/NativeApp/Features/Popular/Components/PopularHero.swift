@@ -943,7 +943,8 @@ struct PopularHero: View {
         } label: {
             Label(playTitle, systemImage: "play.fill")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
+                // 跟详情页「开始观看」使用同一语义前景色，随深浅模式切换。
+                .foregroundStyle(KazumiPalette.onAccent(for: colorScheme))
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
