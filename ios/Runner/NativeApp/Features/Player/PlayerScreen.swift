@@ -1175,7 +1175,7 @@ struct PlayerScreen: View {
             }
             // 这一层几何本身要铺到窗口边：控制层（和它的遮罩）原来排在安全区里，
             // 遮罩就从安全区下沿起画、离窗口顶差那一点（LP 2026-10-28 反复报的）。
-            // 顶栏自己有 padding(.top, containerInsets.top)，按钮不会顶到刘海下面。
+            // 顶栏自己有 padding(.top, playerTopInset)，按钮不会顶到刘海下面。
             .ignoresSafeArea(.container, edges: isFullscreen ? [.top, .bottom] : [])
 
             // HUD 一律放在画面从上往下 1/4 处、水平居中（LP 2026-10-28 第 11 条 / Colo）：
@@ -1523,6 +1523,16 @@ struct PlayerScreen: View {
     }
 
 
+    /// 顶栏离画面上沿的距离（原 12，按「上移现在距离的一半」收到 6）。
+    private static let playerTopInset: CGFloat = 6
+    /// 竖屏底栏离画面下沿的距离（原 12，按「下移现在距离的一半」收到 6）。
+    private static let portraitTransportBottomInset: CGFloat = 6
+    /// 横屏进度条轨道在 44pt 触控区里下移的量：轨道原来居中，离下方按钮行
+    /// 还有约 20pt；下移一半（10pt）让轨道靠近按钮行，触控区不动。
+    private static let landscapeProgressDrop: CGFloat = 10
+    /// 横屏时间标签离轨道的间距（原 8，收到 4 让它更贴近进度条）。
+    private static let landscapeTimeLabelGap: CGFloat = 4
+
     /// 顶条只往上多画这么多点：画在屏幕外，专门吃「跟窗口顶之间那几个点」的缝。
     private static let maskTopOvershoot: CGFloat = 16
 
@@ -1546,19 +1556,24 @@ struct PlayerScreen: View {
         isFullscreen: Bool
     ) -> (top: CGFloat, bottom: CGFloat) {
         guard videoHeight > 0 else { return (0, 0) }
-        // 栏高按代码里的实际值（@developer3 2026-10-28 4300）：顶栏 56（44 的钮
-        // ＋12）；底栏横屏约 115（时间行＋进度条＋48 的钮行＋12），竖屏 64（52＋12）。
-        let topBar: CGFloat = 56
-        let bottomBar: CGFloat = isFullscreen ? 115 : 64
+        // 栏高按代码里的实际值（@developer3 2026-10-28 4300）：顶栏 50（44 的钮
+        // ＋上移后的 6）；底栏横屏约 115（时间行＋进度条＋48 的钮行＋12），
+        // 竖屏 58（52＋下移后的 6）。
+        let topBar: CGFloat = 44 + Self.playerTopInset
+        let bottomBar: CGFloat = isFullscreen ? 115 : 52 + Self.portraitTransportBottomInset
         // 竖屏画面只有 16:9 那么高，原来按「栏高之外再分渐隐」算，会把顶条压到
-        // 34 点——顶栏自己的 56 点都盖不满，纯白画面上白字就看不见了。
+        // 34 点——顶栏自己的 50 点都盖不满，纯白画面上白字就看不见了。
         // 竖屏改成上下同高：至少盖住栏高，最多 72，中间仍留一段全透明画面。
+        // 顶栏上移、底栏下移各 6，竖屏两条渐隐也跟着收 6，别比栏多出一截。
         if !isFullscreen {
-            // 64 起步盖住顶栏 56，72 封顶；极矮的画面再按 45% 收一下，别糊满。
-            let fade = min(72, min(max(64, videoHeight * 0.33), videoHeight * 0.45))
+            let fade = max(
+                0,
+                min(72, min(max(64, videoHeight * 0.33), videoHeight * 0.45))
+                    - Self.playerTopInset
+            )
             return (fade, fade)
         }
-        var top = min(96, videoHeight * 0.25)
+        var top = max(0, min(96, videoHeight * 0.25) - Self.playerTopInset)
         var bottom = min(200, videoHeight * 0.45)
         let available = videoHeight - topBar - bottomBar
         if available > 0, top + bottom > available {
@@ -2187,7 +2202,7 @@ struct PlayerScreen: View {
             .fixedSize()
         }
         .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.top, Self.playerTopInset)
         .onAppear { isCasting = Self.hasExternalVideoRoute }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             isCasting = Self.hasExternalVideoRoute
@@ -3023,25 +3038,27 @@ struct PlayerScreen: View {
     private var portraitTransport: some View {
         HStack(spacing: 8) {
             playPauseButton
-            scrubber
+            scrubber()
             timeLabel
             fullscreenButton
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        .padding(.bottom, Self.portraitTransportBottomInset)
         .frame(height: 52)
     }
 
-    /// 横屏：时间文字在进度条上方（左 10、下 10），进度条左右各 10，
-    /// 再下面一行按钮（左右各 10）。按钮行按 Colo 3613 的精简版：手机横屏放不下十颗。
+    /// 横屏：时间文字在进度条上方（左 16、下 4），进度条左右各 16，
+    /// 再下面一行按钮（左右各 16）。按钮行按 Colo 3613 的精简版：手机横屏放不下十颗。
     private func landscapeTransport(_ controller: PlayerController) -> some View {
         VStack(spacing: 0) {
             timeLabel
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 16)
-                .padding(.bottom, 8)
+                .padding(.bottom, Self.landscapeTimeLabelGap)
+                // 时间跟轨道一起下移；再靠缩短间距贴近轨道。
+                .offset(y: Self.landscapeProgressDrop)
 
-            scrubber
+            scrubber(trackOffset: Self.landscapeProgressDrop)
                 .padding(.horizontal, 16)
 
             HStack(spacing: 8) {
@@ -3318,11 +3335,10 @@ struct PlayerScreen: View {
         showControlsBriefly()
     }
 
-    /// 进度条：交给系统 `Slider`（原生轨道与拇指），不再自绘。
-    /// 拖动中读本地 `scrubValue` 预览，松手才真 seek——画面不跟着每一帧抖。
     /// 进度条：只有轨道，没有拇指。未播白 30%、已播纯白，靠色差看进度
     /// （LP 2026-10-27「胶囊白块除了占空毫无意义」）。交互不删：整条 44 高都能拖。
-    private var scrubber: some View {
+    /// `trackOffset` 只挪可见轨道，不挪 44pt 的触控区。
+    private func scrubber(trackOffset: CGFloat = 0) -> some View {
         let total = max(surface.duration, 0.001)
         let current = min(max(isScrubbing ? scrubValue : surface.currentTime, 0), total)
         let progress = total > 0 ? min(max(current / total, 0), 1) : 0
@@ -3332,12 +3348,18 @@ struct PlayerScreen: View {
             let bubbleWidth: CGFloat = 72
             let bubbleX = min(max(scrubFingerX - bubbleWidth / 2, 0), max(width - bubbleWidth, 0))
             ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.3))
-                    .frame(height: 4)
-                Capsule()
-                    .fill(.white)
-                    .frame(width: width * progress, height: 4)
+                Group {
+                    Capsule()
+                        .fill(.white.opacity(0.3))
+                        .frame(height: 4)
+                    Capsule()
+                        .fill(.white)
+                        .frame(width: width * progress, height: 4)
+                }
+                .offset(y: trackOffset)
+                // 触控区固定铺满 44pt，不跟着轨道下移。
+                Color.clear
+                    .contentShape(Rectangle())
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -3356,7 +3378,7 @@ struct PlayerScreen: View {
                 if isScrubbing {
                     scrubTimeBubble
                         .frame(width: bubbleWidth)
-                        .offset(x: bubbleX, y: -22)
+                        .offset(x: bubbleX, y: -22 + trackOffset)
                         .allowsHitTesting(false)
                 }
             }
