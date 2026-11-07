@@ -36,9 +36,9 @@ final class DanmakuOverlayView: UIView {
                 return
             }
 
-            // Apple 的 CoreText 示例要求：颜色完全从 CGContext 取时，字符串本身
-            // 不能再留 `.foregroundColor`。上一版同时保留两套颜色来源，导致 stroke / fill
-            // 各自走了不同的 run，视觉上又错成斜向叠字。
+            // 只生成一条 CTLine，让描边与填充复用完全相同的字形和位置。
+            // 必须先移除 run 自带的 `.foregroundColor`，否则它会覆盖 CGContext
+            // 的黑色 stroke；实际颜色改由 context 在两次绘制前分别提供。
             let fillColor = attributedText.attribute(
                 .foregroundColor,
                 at: 0,
@@ -72,19 +72,28 @@ final class DanmakuOverlayView: UIView {
             context.scaleBy(x: 1, y: -1)
             let textOrigin = CGPoint(x: x, y: baseline)
             context.setLineWidth(outlineWidth)
-            context.setLineJoin(.round)
-            context.setLineCap(.round)
-            // 两遍必须用同一条 CTLine 和同一个 origin；第一遍仅画黑色轮廓，
-            // 第二遍在完全相同的位置盖回弹幕原色。
+            // 与 canvas_danmaku 的默认 Paint 一致：miter join、butt cap、miterLimit 4。
+            context.setLineJoin(.miter)
+            context.setLineCap(.butt)
+            context.setMiterLimit(4)
+
+            // CTLineDraw 允许改动 CGContext 状态。每一遍都用独立 graphics state，
+            // 并显式重置 textMatrix / textPosition，保证 fill 与 stroke 严格同位。
+            context.saveGState()
+            context.textMatrix = .identity
             context.setTextDrawingMode(.stroke)
             context.setStrokeColor(UIColor.black.cgColor)
             context.textPosition = textOrigin
             CTLineDraw(line, context)
+            context.restoreGState()
 
+            context.saveGState()
+            context.textMatrix = .identity
             context.setTextDrawingMode(.fill)
             context.setFillColor(fillColor.cgColor)
             context.textPosition = textOrigin
             CTLineDraw(line, context)
+            context.restoreGState()
             context.restoreGState()
         }
     }
