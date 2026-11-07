@@ -3213,7 +3213,9 @@ struct PlayerScreen: View {
     /// 横屏底栏里的发弹幕：白 38% 底、圆角、13 号、hint 照原版，右边一颗「发送」。
     /// 弹幕关着时整个框灰掉并挡住输入——发了也看不见，不如先说清楚。
     private var danmakuField: some View {
-        HStack(spacing: 6) {
+        // 发送键从输入框右端切出一块深色区：输入区和按钮共用同一个圆角底，
+        // 按钮自己的底色贴满上下、右边跟外框同圆角，文字左右各留 12pt，视觉居中。
+        HStack(spacing: 0) {
             TextField(
                 "",
                 text: $danmakuDraft,
@@ -3224,9 +3226,13 @@ struct PlayerScreen: View {
             .foregroundStyle(.white)
             .tint(.white)
             .focused($danmakuFieldFocused)
-            .submitLabel(.send)
-            .onSubmit { sendDanmaku() }
+            // iOS 的 returnKeyType 没有「取消」这一档；这里把回车动作改成取消，
+            // 键帽保留系统回车符号，发送仍然只走右边那颗按钮。
+            .submitLabel(.return)
+            .onSubmit { cancelDanmakuInput() }
             .disabled(!danmakuEnabled)
+            .padding(.leading, 10)
+            .padding(.trailing, 10)
             .onChange(of: danmakuFieldFocused) { _, focused in
                 if focused {
                     // 只在真播着时停：本来暂停的不动。
@@ -3250,20 +3256,37 @@ struct PlayerScreen: View {
             } label: {
                 Text("发送")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(canSendDanmaku ? .white : .white.opacity(0.45))
-                    .padding(.horizontal, 6)
-                    .frame(height: 33)
+                    .foregroundStyle(canSendDanmaku ? .white : .white.opacity(0.55))
+                    .padding(.horizontal, 12)
+                    .frame(maxHeight: .infinity)
+                    .background {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 0,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: 10,
+                            topTrailingRadius: 10,
+                            style: .continuous
+                        )
+                        .fill(.black.opacity(danmakuEnabled ? 0.18 : 0.10))
+                    }
                     .contentShape(Rectangle())
             }
             .buttonStyle(PlayerPressStyle())
             .disabled(!canSendDanmaku)
             .accessibilityLabel("发送弹幕")
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 2)
         .frame(height: 33)
         .background(.white.opacity(danmakuEnabled ? 0.38 : 0.18),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// 键盘回车：不收弹幕，直接当取消——清空草稿、收键盘；原来暂停的由焦点
+    /// 变化那条路径恢复播放。
+    private func cancelDanmakuInput() {
+        danmakuDraft = ""
+        danmakuFieldFocused = false
+        noteInteraction()
+        showControlsBriefly()
     }
 
     private var canSendDanmaku: Bool {
