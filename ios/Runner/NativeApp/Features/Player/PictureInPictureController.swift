@@ -30,7 +30,7 @@ final class PictureInPictureController: NSObject {
         case settled(Int)
     }
 
-    private let hostView = PiPHostView()
+    private var hostView = PiPHostView()
     private var pipController: AVPictureInPictureController?
     private var copier: PiPFrameCopier?
     private weak var surface: PlayerSurfaceModel?
@@ -122,9 +122,14 @@ final class PictureInPictureController: NSObject {
         contentIsPrimaryAndPlaying = surface.isPlaying
         guard ensureController(), attachHostIfNeeded() else { return }
 
-        if let copier, copier.engine !== engine {
-            copier.teardown()
-            self.copier = nil
+        let engineChanged = copier.map { $0.engine !== engine } ?? false
+        if let copier, engineChanged {
+            // AVSampleBufferRenderSynchronizer 不允许把同一个 renderer 再加到
+            // 另一个同步器上。换集时驱动器复用同一个 hostView/displayLayer，
+            // 因此这里只能把现有 copier 改绑到新引擎，绝不能 teardown 后重建：
+            // 重建会在 init 里对同一个 renderer 再 addRenderer，直接抛
+            // NSInvalidArgumentException 崩溃（真机 3.0.2 自动连播复现）。
+            copier.retarget(engine: engine)
         }
         let alreadyPrepared = copier != nil && captureTimer != nil
         if copier == nil {
@@ -135,11 +140,11 @@ final class PictureInPictureController: NSObject {
         }
         setCaptureCadence(0.5, reason: "内联低频")
         refreshAutomaticStart(reason: "内容源已准备")
-        if !alreadyPrepared {
+        if !alreadyPrepared || engineChanged {
             copier?.driveSynchronizer(engine: engine)
             engine.requestRender()
         }
-        result = alreadyPrepared ? "inline幂等复用" : "内容源已建立"
+        result = alreadyPrepared ? (engineChanged ? "inline换引擎复用" : "inline幂等复用") : "内容源已建立"
     }
 
     /// Forwarded exactly once for a real scene background transition.
@@ -272,6 +277,9 @@ final class PictureInPictureController: NSObject {
         copier?.teardown()
         copier = nil
         hostView.removeFromSuperview()
+        // renderer 无法安全从旧 synchronizer 上摘下来；换一块新宿主视图，
+        // 下次 prepare 拿到的是全新的 displayLayer/renderer，避免重复 addRenderer。
+        hostView = PiPHostView()
         isActive = false
         phase = .inline
         pendingControllerStop = false
@@ -1076,6 +1084,24 @@ private final class PiPFrameCopier {
 
     var lastEnqueuedFrameAge: Double? {
         lastEnqueuedHostTime.map { CACurrentMediaTime() - $0 }
+    }
+
+    /// 换集时复用同一个 renderer/同步器，只把取帧来源改到新引擎。
+    /// 不能重建 copier：displayLayer 的 sampleBufferRenderer 已经在当前
+    /// synchronizer 上，重复 addRenderer 会抛异常。
+    func retarget(engine: MPVEngine) {
+        guard self.engine !== engine else { return }
+        captureGeneration += 1
+        captureTask?.cancel()
+        captureTask = nil
+        renderer.flush()
+        formatDescription = nil
+        lastPTS = .nan
+        lastEnqueuedHostTime = nil
+        didLogFirstFrame = false
+        didLogFailure = false
+        self.engine = engine
+        driveSynchronizer(engine: engine)
     }
 
     func driveSynchronizer(engine: MPVEngine?) {
