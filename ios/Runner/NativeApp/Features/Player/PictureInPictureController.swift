@@ -110,7 +110,28 @@ final class PictureInPictureController: NSObject {
             log("prepare result=\(result) background=\(background) sourceReady=\(pipController?.contentSource != nil && copier != nil && hostView.window != nil) copyReady=\(copier != nil) cadence=\(captureCadence.map { String(format: "%.6f", $0) } ?? "off")")
         }
         if hasOngoingPictureInPicture {
-            result = self.engine === engine ? "同引擎沿用活动周期/节拍/资格" : "过渡中保留原内容源"
+            // 活动小窗期间换集：surface/engine 必须跟上，否则代理回调仍按
+            // 上一集的时长作答，copier 也还绑在已停止的旧引擎上（小窗冻结）。
+            self.surface = surface
+            contentIsPrimaryAndPlaying = surface.isPlaying
+            let engineChanged = copier.map { $0.engine !== engine } ?? false
+            let transitioning: Bool
+            switch phase {
+            case .starting, .restoring:
+                transitioning = true
+            default:
+                transitioning = false
+            }
+            if engineChanged, !transitioning, let engine, engine.handle != nil {
+                self.engine?.setPictureInPictureFrameFeedActive(false)
+                self.engine = engine
+                copier?.retarget(engine: engine)
+                engine.setPictureInPictureFrameFeedActive(true)
+                engine.requestRender()
+                result = "活动小窗换引擎改绑"
+            } else {
+                result = self.engine === engine ? "同引擎沿用活动周期/节拍/资格" : "过渡中保留原内容源"
+            }
             return
         }
         self.surface = surface
@@ -1059,6 +1080,9 @@ private final class PiPFrameCopier {
     private(set) var isCapturing = false
 
     private var formatDescription: CMVideoFormatDescription?
+    private var formatWidth = 0
+    private var formatHeight = 0
+    private var formatPixelFormat: OSType = 0
     private var lastPTS = Double.nan
     private var lastEnqueuedHostTime: CFTimeInterval?
     private var lastCaptureHostTime: CFTimeInterval = 0
@@ -1096,6 +1120,9 @@ private final class PiPFrameCopier {
         captureTask = nil
         renderer.flush()
         formatDescription = nil
+        formatWidth = 0
+        formatHeight = 0
+        formatPixelFormat = 0
         lastPTS = .nan
         lastEnqueuedHostTime = nil
         didLogFirstFrame = false
@@ -1169,6 +1196,9 @@ private final class PiPFrameCopier {
         // The synchronizer owns this renderer for the copier's lifetime. Do not
         // detach on iOS 26: removeRenderer requires an asynchronous completion.
         formatDescription = nil
+        formatWidth = 0
+        formatHeight = 0
+        formatPixelFormat = 0
         lastEnqueuedHostTime = nil
     }
 
@@ -1247,6 +1277,24 @@ private final class PiPFrameCopier {
             logFeedEvent("断帧：转缓冲失败，保持时基", frame: frame)
             return
         }
+        // 同一条播放内核里分辨率或像素格式变了：旧 formatDescription 不能再用，
+        // 否则每帧 CMSampleBufferCreateReadyWithImageBuffer 都会失败，小窗永久冻住。
+        let pixelWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let pixelHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        if formatDescription != nil,
+           formatWidth > 0,
+           (formatWidth != pixelWidth
+            || formatHeight != pixelHeight
+            || formatPixelFormat != pixelFormat) {
+            formatDescription = nil
+            formatWidth = 0
+            formatHeight = 0
+            formatPixelFormat = 0
+            renderer.flush()
+            lastPTS = .nan
+            logFeedEvent("尺寸或像素格式变化 → 重建 formatDescription", frame: frame)
+        }
         guard let sampleBuffer = makeSampleBuffer(pixelBuffer: pixelBuffer, presentationTime: pts) else {
             captureCounts["sample-failure", default: 0] += 1
             logOnce("CMSampleBuffer 创建失败")
@@ -1299,6 +1347,9 @@ private final class PiPFrameCopier {
             )
             guard status == noErr, let description else { return nil }
             formatDescription = description
+            formatWidth = CVPixelBufferGetWidth(pixelBuffer)
+            formatHeight = CVPixelBufferGetHeight(pixelBuffer)
+            formatPixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
         }
         guard let formatDescription else { return nil }
         var timing = CMSampleTimingInfo(
