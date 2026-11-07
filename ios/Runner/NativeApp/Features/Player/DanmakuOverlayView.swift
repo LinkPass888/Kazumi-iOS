@@ -327,19 +327,21 @@ final class DanmakuOverlayView: UIView {
 
         let label = ItemLabel()
         let size = max(10, min(48, style.fontSize))
+        let font = UIFont.systemFont(ofSize: size, weight: Self.weight(style.fontWeight))
         // 关掉「弹幕颜色」就一律白字（main 的 danmakuColor）。
-        label.text = comment.text
-        label.font = .systemFont(ofSize: size, weight: Self.weight(style.fontWeight))
-        label.textColor = style.useColor ? Self.color(comment.colorValue) : .white
-        if style.border {
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.9
-            label.layer.shadowRadius = CGFloat(max(0.5, min(3, style.borderSize)))
-        } else {
-            label.layer.shadowOpacity = 0
-            label.layer.shadowRadius = 0
+        let textColor = style.useColor ? Self.color(comment.colorValue) : UIColor.white
+        let border = style.border ? max(0, min(3, style.borderSize)) : 0
+        // 用 CoreText 的文字描边，而不是 layer 阴影。`strokeWidth` 是字号的百分比，
+        // 正值只描边、负值「描边 + 填充」；这里按点数换算成百分比，1.5pt / 20pt = -7.5%。
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: textColor
+        ]
+        if border > 0 {
+            attributes[.strokeColor] = UIColor.black
+            attributes[.strokeWidth] = -(border / Double(size) * 100)
         }
-        label.layer.shadowOffset = .zero
+        label.attributedText = NSAttributedString(string: comment.text, attributes: attributes)
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byClipping
@@ -353,8 +355,10 @@ final class DanmakuOverlayView: UIView {
         let fitted = label.sizeThatFits(
             CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         )
-        let width = ceil(fitted.width) + 4
-        let height = ceil(fitted.height) + 2
+        // 描边会向字形轮廓外扩，sizeThatFits 不算这笔；按粗细留边，免得笔画被裁掉。
+        let edgePadding = max(4, ceil(CGFloat(border) * 2) + 2)
+        let width = ceil(fitted.width) + edgePadding
+        let height = ceil(fitted.height) + edgePadding
         label.bounds = CGRect(origin: .zero, size: CGSize(width: width, height: height))
         label.layer.shouldRasterize = true
         label.layer.rasterizationScale = currentScreenScale
