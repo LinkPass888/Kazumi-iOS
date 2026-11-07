@@ -24,6 +24,15 @@ final class DanmakuOverlayView: UIView {
         var lane: Int = 0
         var mode: Int = 1
         var baseY: CGFloat = .nan
+        /// 先画这层（只描边），再把 `attributedText` 的实心字压上去。
+        /// 不能把描边属性塞进同一个字符串：那样描边和填充在同一次绘制里，
+        /// 内轮廓、笔画交叉处都会被涂黑。
+        var strokeText: NSAttributedString?
+
+        override func drawText(in rect: CGRect) {
+            strokeText?.draw(in: rect)
+            attributedText?.draw(in: rect)
+        }
     }
 
     private var comments: [DanmakuComment] = []
@@ -331,17 +340,31 @@ final class DanmakuOverlayView: UIView {
         // 关掉「弹幕颜色」就一律白字（main 的 danmakuColor）。
         let textColor = style.useColor ? Self.color(comment.colorValue) : UIColor.white
         let border = style.border ? max(0, min(3, style.borderSize)) : 0
-        // 用 CoreText 的文字描边，而不是 layer 阴影。`strokeWidth` 是字号的百分比，
-        // 正值只描边、负值「描边 + 填充」；这里按点数换算成百分比，1.5pt / 20pt = -7.5%。
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+        // 填充字和描边字用同一套排版，两次绘制的基线才不会错开。
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: textColor
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraph
         ]
-        if border > 0 {
-            attributes[.strokeColor] = UIColor.black
-            attributes[.strokeWidth] = -(border / Double(size) * 100)
-        }
         label.attributedText = NSAttributedString(string: comment.text, attributes: attributes)
+        if border > 0 {
+            // 仿 canvas_danmaku：先画一层 `PaintingStyle.stroke` 的黑字，
+            // 再把实心字盖上去。`strokeWidth` 是字号的百分比，按点数换算；
+            // 正值只描边，不会把字涂满。
+            var strokeAttributes = attributes
+            strokeAttributes[.foregroundColor] = UIColor.clear
+            strokeAttributes[.strokeColor] = UIColor.black
+            strokeAttributes[.strokeWidth] = border / Double(size) * 100
+            label.strokeText = NSAttributedString(
+                string: comment.text,
+                attributes: strokeAttributes
+            )
+        } else {
+            label.strokeText = nil
+        }
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byClipping
