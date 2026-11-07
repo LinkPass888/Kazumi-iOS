@@ -13,6 +13,7 @@
 //   * 透明度 / 字号 / 显示区域（屏幕高度占比）来自弹幕设置。
 //
 
+import CoreText
 import QuartzCore
 import UIKit
 
@@ -24,14 +25,54 @@ final class DanmakuOverlayView: UIView {
         var lane: Int = 0
         var mode: Int = 1
         var baseY: CGFloat = .nan
-        /// 先画这层（只描边），再把 `attributedText` 的实心字压上去。
-        /// 不能把描边属性塞进同一个字符串：那样描边和填充在同一次绘制里，
-        /// 内轮廓、笔画交叉处都会被涂黑。
-        var strokeText: NSAttributedString?
+        /// 描边宽度（pt）。0 表示不描边。
+        var outlineWidth: CGFloat = 0
 
         override func drawText(in rect: CGRect) {
-            strokeText?.draw(in: rect)
-            attributedText?.draw(in: rect)
+            guard outlineWidth > 0,
+                  let attributedText,
+                  let context = UIGraphicsGetCurrentContext() else {
+                super.drawText(in: rect)
+                return
+            }
+
+            let line = CTLineCreateWithAttributedString(attributedText as CFAttributedString)
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            var leading: CGFloat = 0
+            let lineWidth = CGFloat(
+                CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+            )
+            let lineHeight = ascent + descent + leading
+            // 仿 canvas_danmaku 的两次 drawParagraph：同一个 CTLine、同一个基线，
+            // 先用 CGContext 的 .stroke 模式画黑边，再用 .fill 盖实心字。
+            // 两次都用同一条 line，描边就不会相对字形偏移成「斜着的 3D」。
+            let x = (rect.width - lineWidth) / 2
+            let baseline = (rect.height - lineHeight) / 2 + descent + leading / 2
+
+            context.saveGState()
+            context.textMatrix = .identity
+            // UIView 的上下文是左上原点、y 向下；CoreText 要左下原点、y 向上。
+            context.translateBy(x: rect.origin.x, y: rect.origin.y + rect.height)
+            context.scaleBy(x: 1, y: -1)
+            context.textPosition = CGPoint(x: x, y: baseline)
+            context.setLineWidth(outlineWidth)
+            context.setLineJoin(.round)
+            context.setLineCap(.round)
+            context.setStrokeColor(UIColor.black.cgColor)
+            if let fillColor = attributedText.attribute(
+                .foregroundColor,
+                at: 0,
+                effectiveRange: nil
+            ) as? UIColor {
+                context.setFillColor(fillColor.cgColor)
+            }
+
+            context.setTextDrawingMode(.stroke)
+            CTLineDraw(line, context)
+            context.setTextDrawingMode(.fill)
+            CTLineDraw(line, context)
+            context.restoreGState()
         }
     }
 
@@ -343,28 +384,17 @@ final class DanmakuOverlayView: UIView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byClipping
-        // 填充字和描边字用同一套排版，两次绘制的基线才不会错开。
+        // 填充字和描边用同一套排版，`drawText` 里再用同一个 CTLine 画两遍。
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: textColor,
+            .strokeColor: UIColor.black,
             .paragraphStyle: paragraph
         ]
         label.attributedText = NSAttributedString(string: comment.text, attributes: attributes)
-        if border > 0 {
-            // 仿 canvas_danmaku：先画一层 `PaintingStyle.stroke` 的黑字，
-            // 再把实心字盖上去。`strokeWidth` 是字号的百分比，按点数换算；
-            // 正值只描边，不会把字涂满。
-            var strokeAttributes = attributes
-            strokeAttributes[.foregroundColor] = UIColor.clear
-            strokeAttributes[.strokeColor] = UIColor.black
-            strokeAttributes[.strokeWidth] = border / Double(size) * 100
-            label.strokeText = NSAttributedString(
-                string: comment.text,
-                attributes: strokeAttributes
-            )
-        } else {
-            label.strokeText = nil
-        }
+        // 直接用 pt，跟 canvas_danmaku 的 `Paint.strokeWidth` 一样；不再折算成
+        // NSStrokeWidth 的字体百分比，避免两套排版把描边挤成斜向偏移。
+        label.outlineWidth = CGFloat(border)
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byClipping
