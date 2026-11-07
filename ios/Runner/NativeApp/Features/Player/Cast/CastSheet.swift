@@ -82,53 +82,55 @@ struct CastSheet: View {
     private var spacing: CGFloat { 16 }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: spacing) {
-                Text("远程投屏")
-                    .font(.headline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.9)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: spacing) {
+                    methodPicker
 
-                methodPicker
+                    deviceArea
 
-                deviceArea
-
-                limitationRow(
-                    String(localized: "电视自己取流，本机的 UA、Referer、Cookie 带不过去；要这些头的片源会投不上。")
-                )
-                limitationRow(
-                    String(localized: "弹幕、超分、片头片尾跳过、本地字幕只在本机生效。")
-                )
-
-                Button {
-                    dismiss()
-                } label: {
-                    Text("完成")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                    limitationRow(
+                        String(localized: "电视自己取流，本机的 UA、Referer、Cookie 带不过去；要这些头的片源会投不上。")
+                    )
+                    limitationRow(
+                        String(localized: "弹幕、超分、片头片尾跳过、本地字幕只在本机生效。")
+                    )
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(KazumiPalette.accent(for: colorScheme))
-                .foregroundStyle(KazumiPalette.onAccent(for: colorScheme))
-                .padding(.top, spacing)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
+            .background(KazumiPalette.groupedBackground(for: colorScheme).ignoresSafeArea())
+            // Banner 放在导航栏下面，别盖住居中的标题和右上角关闭按钮。
+            .overlay(alignment: .top) {
+                if let banner {
+                    KazumiBanner(
+                        title: banner.title,
+                        detail: banner.detail,
+                        variant: banner.variant,
+                        onDismiss: { withAnimation(.snappy) { self.banner = nil } }
+                    )
+                }
+            }
+            .navigationTitle("远程投屏")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(Color.primary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("关闭")
+                }
+            }
         }
-        .background(KazumiPalette.groupedBackground(for: colorScheme))
         .presentationDetents([.height(420), .medium, .large])
         .presentationBackground(KazumiPalette.groupedBackground(for: colorScheme))
-        .overlay(alignment: .top) {
-            if let banner {
-                KazumiBanner(
-                    title: banner.title,
-                    detail: banner.detail,
-                    variant: banner.variant,
-                    onDismiss: { withAnimation(.snappy) { self.banner = nil } }
-                )
-            }
-        }
         .onAppear {
             if manualIP.isEmpty {
                 manualIP = settings.lastDLNAAddress

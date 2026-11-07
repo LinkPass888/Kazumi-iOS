@@ -128,6 +128,8 @@ final class PictureInPictureController: NSObject {
                 copier?.retarget(engine: engine)
                 engine.setPictureInPictureFrameFeedActive(true)
                 engine.requestRender()
+                // 换集后时长/进度都变了，让系统重读一遍，避免小窗进度条停在上一集。
+                pipController?.invalidatePlaybackState()
                 result = "活动小窗换引擎改绑"
             } else {
                 result = self.engine === engine ? "同引擎沿用活动周期/节拍/资格" : "过渡中保留原内容源"

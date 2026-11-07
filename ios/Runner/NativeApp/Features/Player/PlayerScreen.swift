@@ -377,6 +377,11 @@ struct PlayerScreen: View {
     @State private var sleepTimerRemaining: Int?
     @State private var sleepTimerChosenMinutes: Int?
     @State private var sleepTimerTask: Task<Void, Never>?
+    /// 菜单打开那一刻的倒计时快照：菜单开着时继续每秒改标题会重建 UIMenu，
+    /// 正在展开的「定时关闭」子菜单会被系统当场收掉。
+    @State private var frozenSleepTimerRemaining: Int?
+    @State private var frozenSleepTimerChosenMinutes: Int?
+    @State private var isSleepTimerMenuFrozen = false
     /// 片头片尾弹窗：AniSkip 的时间轴 + 倒数 / 撤销 / 切集三态。
     @State private var skipPill = SkipSegmentPillModel()
 
@@ -681,10 +686,12 @@ struct PlayerScreen: View {
                         // 菜单已经收了：控制栏恢复自动隐藏。
                         menuOpen = false
                         probeSawMenu = false
+                        isSleepTimerMenuFrozen = false
                         scheduleControlsHide()
                     } else if !probeSawMenu, Date().timeIntervalSince(menuOpenedAt) > 45 {
                         // 探测器没认出来（换过实现就不一定认得出），留个上限，别把控制栏钉死。
                         menuOpen = false
+                        isSleepTimerMenuFrozen = false
                         scheduleControlsHide()
                     }
                 }
@@ -2257,7 +2264,7 @@ struct PlayerScreen: View {
                 }
             }),
             title: nil,
-            symbol: sleepTimerRemaining == nil ? "moon.zzz" : "moon.zzz.fill",
+            symbol: displayedSleepTimerRemaining == nil ? "moon.zzz" : "moon.zzz.fill",
             accessibilityLabel: String(localized: "定时关闭"),
             tint: .white,
             onOpen: { pinControlsWhileMenuOpen() }
@@ -2402,18 +2409,28 @@ struct PlayerScreen: View {
 
     /// 正在倒数时显示主菜单行右侧的 mm:ss。
     private var sleepTimerValue: String {
-        guard let remaining = sleepTimerRemaining else { return "不开启" }
+        guard let remaining = displayedSleepTimerRemaining else { return "不开启" }
         return String(format: "%02d:%02d", remaining / 60, remaining % 60)
+    }
+
+    /// 菜单打开期间用快照，避免每秒改标题导致 UIMenu 重建、子菜单被收。
+    private var displayedSleepTimerRemaining: Int? {
+        isSleepTimerMenuFrozen ? frozenSleepTimerRemaining : sleepTimerRemaining
+    }
+
+    private var displayedSleepTimerChosenMinutes: Int? {
+        isSleepTimerMenuFrozen ? frozenSleepTimerChosenMinutes : sleepTimerChosenMinutes
     }
 
     /// 用户选的那一档（选中的勾看它，不跟着倒数变）。
     private var sleepTimerMinutes: Int? {
-        sleepTimerChosenMinutes
+        displayedSleepTimerChosenMinutes
     }
 
     /// 档位保持固定；正在倒数的那一项额外显示 mm:ss。
     private func sleepTimerItemTitle(_ minutes: Int) -> String {
-        if sleepTimerChosenMinutes == minutes, let remaining = sleepTimerRemaining {
+        if displayedSleepTimerChosenMinutes == minutes,
+           let remaining = displayedSleepTimerRemaining {
             return String(format: "%02d:%02d", remaining / 60, remaining % 60)
         }
         return String(localized: "\(String(describing: minutes)) 分钟")
@@ -2516,7 +2533,16 @@ struct PlayerScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { activeSheet = nil }
+                    Button {
+                        activeSheet = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(Color.primary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("关闭")
                 }
             }
         }
@@ -2638,11 +2664,10 @@ struct PlayerScreen: View {
             noteInteraction()
             handleDanmakuButton()
         } label: {
-            // 符号统一成 captions.bubble：开启用 .fill 表示（LP 2026-10-27 定，
-            // 不用强调色），颜色一律白。尺寸 20pt，跟其余图标同一档。
-            Image(systemName: danmakuEnabled ? "captions.bubble.fill" : "captions.bubble")
-                .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(.white)
+            // 跟弹幕设置同一套「弹」符号；开关用无齿轮版，设置用带齿轮版，
+            // 两个按钮挨着也分得清。开启时全白，关闭时压暗。
+            DanmakuSettingsGlyph(color: .white, showsGear: false)
+                .opacity(danmakuEnabled ? 1 : 0.45)
                 .frame(width: width, height: height)
                 .contentShape(Rectangle())
         }
@@ -2693,8 +2718,7 @@ struct PlayerScreen: View {
         }
     }
 
-    /// 弹幕设置的图标：`captions.bubble` 20pt 打底，右下角叠一颗 12pt 的
-    /// `gearshape.fill`，圆心压在气泡外框的右下角上（Colo 2026-10-27）。
+    /// 弹幕设置的图标：20×18 的「弹」字框，右下角压一颗 8pt 齿轮。
     /// 按钮用 SwiftUI 叠，系统菜单里用这张 UIImage——两边同一套尺寸。
     /// 渲好的图按深浅色各存一张：颜色跟着当前外观定，切外观不会用错那张。
     private nonisolated(unsafe) static var cachedDanmakuSettingsIcons: [String: UIImage] = [:]
@@ -2710,22 +2734,20 @@ struct PlayerScreen: View {
     }
 
     private static func renderDanmakuSettingsIcon(scheme: ColorScheme) -> UIImage {
-        // 菜单里那颗跟播放器里是同一个 View，只按深浅色写死两个分支（Colo 2026-10-28）：
-        // 浅色＝气泡空心黑 + 齿轮实心黑；深色＝气泡实心白 + 齿轮实心白。
-        // 不交给系统自动取色——自动取的那份和菜单底色对不上时就看不见了。
+        // 菜单里那颗跟播放器里是同一个 View；渲成模板图后由系统统一 tint。
+        // 颜色只影响渲染时的 alpha 形状，最终显示颜色跟旁边 SF Symbols 一致。
         let dark = scheme == .dark
         let renderer = ImageRenderer(
-            content: DanmakuSettingsGlyph(
-                color: dark ? .white : .black,
-                bubbleFilled: dark
-            )
-            .environment(\.colorScheme, scheme)
+            content: DanmakuSettingsGlyph(color: dark ? .white : .black)
+                .environment(\.colorScheme, scheme)
         )
         renderer.scale = 3
-        return renderer.uiImage ?? UIImage()
+        // 菜单里的图标必须走模板色，跟同一菜单里的 SF Symbols 用同一份 tint；
+        // 否则渲染图自带黑白，浅色/深色下都会比旁边的符号偏一档。
+        return (renderer.uiImage ?? UIImage()).withRenderingMode(.alwaysTemplate)
     }
 
-    /// 弹幕设置：同一颗 `captions.bubble` 打底，右下角叠一颗小齿轮——
+    /// 弹幕设置：跟横屏开关同一套「弹」符号，右下角多一颗小齿轮——
     /// 两个符号占一个符号位，命中仍是 44×44（LP 2026-10-27）。
     private func danmakuSettingsButton() -> some View {
         Button {
@@ -2733,7 +2755,10 @@ struct PlayerScreen: View {
         } label: {
             // 跟「更多 → 弹幕设置」那条用同一张图：一份实现画出来，两边不可能再走样
             // （LP 2026-10-28「横屏和竖屏更多菜单的要一起改，不要只改一个」）。
-            DanmakuSettingsGlyph(color: .white, bubbleFilled: true)
+            DanmakuSettingsGlyph(color: .white)
+                // 图形只有 20×18，命中区和旁边几颗一样撑到 44×44。
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PlayerPressStyle())
         .accessibilityLabel("弹幕设置")
@@ -2835,7 +2860,7 @@ struct PlayerScreen: View {
         ]
         let sleepTimerItem = SystemMenuButton.Item(
             title: "定时关闭",
-            symbol: sleepTimerRemaining == nil ? "moon.zzz" : "moon.zzz.fill",
+            symbol: displayedSleepTimerRemaining == nil ? "moon.zzz" : "moon.zzz.fill",
             subtitle: sleepTimerValue,
             selection: .init(options: [SystemMenuButton.Selection.Option(
                 title: "不开启",
@@ -2882,6 +2907,11 @@ struct PlayerScreen: View {
         probeSawMenu = false
         menuOpenedAt = Date()
         probeLastSeen = Date()
+        // 菜单这一轮打开期间把倒计时文字钉住；否则每秒变一次 subtitle 会重建
+        // UIMenu，用户刚展开的「定时关闭」子菜单会瞬间被收掉。
+        frozenSleepTimerRemaining = sleepTimerRemaining
+        frozenSleepTimerChosenMinutes = sleepTimerChosenMinutes
+        isSleepTimerMenuFrozen = true
         // 已经排上的收层计时作废，等菜单关了重新起算。
         hideGeneration &+= 1
     }
@@ -2890,6 +2920,7 @@ struct PlayerScreen: View {
     private func closeMenu() {
         menuOpen = false
         probeSawMenu = false
+        isSleepTimerMenuFrozen = false
     }
 
     /// 顶部快进按钮：单击快进，长按修改秒数（对应原版 player_item_panel 的快进按钮）。
@@ -3143,7 +3174,7 @@ struct PlayerScreen: View {
             accessibilityLabel: String(localized: "超分辨率 \(String(describing: settings.playbackSuperResolutionMode.title))"),
             onOpen: { pinControlsWhileMenuOpen() }
         )
-        .frame(minWidth: 44, minHeight: 40)
+        .frame(width: 44, height: 44)
     }
 
     /// 横屏那颗倍速：底栏只放符号，当前值点开菜单看（Colo 2026-10-28）。
@@ -3163,7 +3194,7 @@ struct PlayerScreen: View {
             accessibilityLabel: String(localized: "倍速 \(String(describing: speedText(Double(playbackRate))))"),
             onOpen: { pinControlsWhileMenuOpen() }
         )
-        .frame(minWidth: 44, minHeight: 40)
+        .frame(width: 44, height: 44)
     }
 
     private var episodesButton: some View {
@@ -3176,7 +3207,7 @@ struct PlayerScreen: View {
             }
         } label: {
             Image(systemName: "list.bullet")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -4810,28 +4841,49 @@ private struct SyncPlaySheet: View {
 /// 别用 `.clear`——画面一动，上面的白字就没地方站。
 /// 播放页按钮的按压反馈：按下缩到 0.92、松开弹回，100ms easeOut。
 /// 不加底色、不变色、不动投影，也不震——iOS 原生按钮本来就不震。
-/// 弹幕设置的图标：`captions.bubble` 20pt 打底、右下角压一颗 12pt 的 `gearshape.fill`，
-/// 白色、`.regular`，44×44 只是命中区，**不裁**（一裁齿轮就断、气泡就变小——
-/// LP 2026-10-28「怎么还出界了」「怎么小了」两回都是裁出来的）。
-/// 横屏底栏直接用这个 View，「更多 → 弹幕设置」把它渲成图，两处同一份。
+/// 播放器横竖屏共用的弹幕符号：圆角框里一个「弹」，右下角压一颗小齿轮。
+/// 画布严格 20×18，和 17–20pt 的 SF Symbols 视觉等大；齿轮处的框线用
+/// `destinationOut` 镂空，不会和齿轮糊在一起。
 struct DanmakuSettingsGlyph: View {
-    /// 颜色和空心/实心都由调用方定，组件里不写死（LP / Colo 2026-10-28）：
-    /// 播放器里两个都白、气泡实心；「更多」菜单里气泡空心黑、齿轮实心黑。
+    /// 颜色由调用方定：播放器里白色，「更多」菜单渲成模板图后跟系统 tint。
     var color: Color = .white
-    /// 气泡用实心还是空心。
-    var bubbleFilled: Bool = true
+    /// 是否显示右下角齿轮；开关用无齿轮版，设置用完整形态。
+    var showsGear: Bool = true
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Image(systemName: bubbleFilled ? "captions.bubble.fill" : "captions.bubble")
-                .font(.system(size: 20, weight: .regular))
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 12, weight: .regular))
-                // 圆心压在气泡外框的右下角上；比 6 再往左上 0.6（LP 2026-10-28）。
-                .offset(x: 5.4, y: 5.4)
+        ZStack {
+            // 主体框：18.5×15，线宽 1.5，往左上微移给齿轮留位。
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(lineWidth: 1.5)
+                .frame(width: 18.5, height: 15)
+                .overlay {
+                    Text("弹")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                        .offset(y: -0.2)
+                }
+                .offset(x: showsGear ? -1 : 0, y: showsGear ? -1 : 0)
+                .overlay(alignment: .bottomTrailing) {
+                    if showsGear {
+                        // 齿轮位置的镂空避让圆，避免框线和齿轮叠在一起。
+                        Circle()
+                            .frame(width: 9.5, height: 9.5)
+                            .offset(x: 1, y: 1)
+                            .blendMode(.destinationOut)
+                    }
+                }
+                .compositingGroup()
+
+            if showsGear {
+                // 右下角小齿轮：8pt，精致但不抢主体。
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .offset(x: 0.5, y: 0.5)
+            }
         }
         .foregroundStyle(color)
-        .frame(width: 44, height: 44)
+        // 严格锁死 20×18，绝不撑大外面的按钮。
+        .frame(width: 20, height: 18)
         .contentShape(Rectangle())
     }
 }
