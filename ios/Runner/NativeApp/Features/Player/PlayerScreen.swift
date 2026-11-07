@@ -1151,7 +1151,7 @@ struct PlayerScreen: View {
                     // 顶条只往上多画 `maskTopOvershoot`：画在屏幕外，专门吃
                     // 「跟窗口顶差几个点」那种缝（LP 2026-10-28 反复报的）。
                     .background(alignment: .top) {
-                        topMask(fadeHeight: maskFades.top)
+                        topMask(fadeHeight: maskFades.top, emphasized: !isFullscreen)
                             .frame(width: maskWidth)
                             .offset(y: -Self.maskTopOvershoot)
                             .opacity(controlsShown ? 1 : 0)
@@ -1542,6 +1542,14 @@ struct PlayerScreen: View {
         // ＋12）；底栏横屏约 115（时间行＋进度条＋48 的钮行＋12），竖屏 64（52＋12）。
         let topBar: CGFloat = 56
         let bottomBar: CGFloat = isFullscreen ? 115 : 64
+        // 竖屏画面只有 16:9 那么高，原来按「栏高之外再分渐隐」算，会把顶条压到
+        // 34 点——顶栏自己的 56 点都盖不满，纯白画面上白字就看不见了。
+        // 竖屏改成上下同高：至少盖住栏高，最多 72，中间仍留一段全透明画面。
+        if !isFullscreen {
+            // 64 起步盖住顶栏 56，72 封顶；极矮的画面再按 45% 收一下，别糊满。
+            let fade = min(72, min(max(64, videoHeight * 0.33), videoHeight * 0.45))
+            return (fade, fade)
+        }
         var top = min(96, videoHeight * 0.25)
         var bottom = min(200, videoHeight * 0.45)
         let available = videoHeight - topBar - bottomBar
@@ -1554,15 +1562,23 @@ struct PlayerScreen: View {
     }
 
     /// 顶部压暗：最黑那一档贴在这块几何的顶边（横屏就是窗口顶），往下渐隐到全透明。
-    /// 顶栏自己那条底不加：0.8 起头已经压得住栏里的字（@developer3 2026-10-28 4297）；
-    /// 真要改成 y=0 就透明，才需要给顶栏补一条底（Colo 4295）。
-    private func topMask(fadeHeight: CGFloat) -> some View {
-        LinearGradient(
-            stops: [
+    /// 竖屏用更「厚」的一组 stops：顶栏白字要压到栏底还有足够对比，不能像横屏
+    /// 那样 50% 就掉到 0.4；横屏维持原样，已经够清楚。
+    private func topMask(fadeHeight: CGFloat, emphasized: Bool = false) -> some View {
+        let stops: [Gradient.Stop] = emphasized
+            ? [
+                .init(color: .black.opacity(0.82), location: 0),
+                .init(color: .black.opacity(0.72), location: 0.62),
+                .init(color: .black.opacity(0.45), location: 0.86),
+                .init(color: .clear, location: 1)
+            ]
+            : [
                 .init(color: .black.opacity(0.8), location: 0),
                 .init(color: .black.opacity(0.4), location: 0.5),
                 .init(color: .clear, location: 1)
-            ],
+            ]
+        return LinearGradient(
+            stops: stops,
             startPoint: .top,
             endPoint: .bottom
         )
