@@ -93,4 +93,63 @@ struct RunnerTests {
         #expect(item.matchesCatalogSearch("  "))
         #expect(!item.matchesCatalogSearch("mikan"))
     }
+
+    @Test("AniSkip 起播稳定前不判定片头")
+    @MainActor
+    func aniSkipWaitsForPlaybackStart() {
+        let model = SkipSegmentPillModel()
+        model.segments = SkipSegments(
+            opening: SkipRange(start: 100, end: 110, source: .aniskip),
+            ending: nil
+        )
+        model.duration = 1_400
+        model.position = 96
+        model.isPlaybackReady = false
+        model.update()
+        #expect(!model.isVisible)
+
+        model.isPlaybackReady = true
+        model.update()
+        #expect(model.isVisible)
+        #expect(model.mode == .countdown)
+    }
+
+    @Test("片尾贴结尾且没有下一集时不弹 AniSkip")
+    @MainActor
+    func aniSkipSuppressesShortEndingWithoutNextEpisode() {
+        let model = SkipSegmentPillModel()
+        model.segments = SkipSegments(
+            opening: nil,
+            ending: SkipRange(start: 100, end: 110, source: .aniskip)
+        )
+        model.duration = 113
+        model.position = 96
+        model.hasNextEpisode = false
+        model.isPlaybackReady = true
+        model.update()
+        #expect(!model.isVisible)
+    }
+
+    @Test("片尾贴结尾时按有没有下一集决定弹窗")
+    @MainActor
+    func aniSkipEndingPromptMatchesNextEpisodeAvailability() {
+        let model = SkipSegmentPillModel()
+        model.segments = SkipSegments(
+            opening: nil,
+            ending: SkipRange(start: 100, end: 110, source: .aniskip)
+        )
+        model.duration = 113
+        model.position = 96
+        model.isPlaybackReady = true
+
+        model.hasNextEpisode = true
+        model.update()
+        #expect(model.isVisible)
+        #expect(model.mode == .nextEpisode)
+
+        model.duration = 120
+        model.update()
+        #expect(model.isVisible)
+        #expect(model.mode == .countdown)
+    }
 }

@@ -594,6 +594,7 @@ struct PlayerScreen: View {
                     skipPill.segments = settings.aniSkipLookup ? controller.skipSegments : .empty
                     skipPill.hasNextEpisode = controller.currentEpisode < controller.episodes.count
                 }
+                skipPill.isPlaybackReady = surface.hasStartedPlayback
                 skipPill.position = surface.currentTime
                 skipPill.duration = surface.duration
                 skipPill.isScrubbing = isScrubbing

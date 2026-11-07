@@ -9,7 +9,9 @@
 //  * 弹窗上「跳过」立刻跳，「取消」本段不再自动跳；
 //  * 跳完给 5 秒「撤销」窗口，撤销跳回区间开头；
 //  * 片尾结束到全集结尾 ≤5 秒时（ED 就是本集结尾）换成「下一集 / 取消」，
-//    倒数到 0 用户无操作就取消——不自动切集，把决定权留给用户。
+//    倒数到 0 用户无操作就取消——不自动切集，把决定权留给用户；
+//  * 同一段片尾如果没有下一集可切，就整段不提示；只有片尾后还剩
+//    >5 秒时才给「即将跳过片尾」。
 //
 //  时间轴来自 AniSkip，是按在线片源测的，不同压制版本会有偏差，
 //  所以默认走「提示 + 倒数」而不是闷头跳。
@@ -47,7 +49,14 @@ final class SkipSegmentPillModel {
     var duration: Double = 0
     /// 用户正在拖进度：弹窗收起来、不自动跳，松手再恢复。
     var isScrubbing = false
-    /// 当前集后面还有没有下一集。末集只提示跳过片尾，不再显示“下一集”倒数。
+    /// 起播是否已经稳定（首帧出来、时间轴开始走）。
+    ///
+    /// 加载阶段 `position` 一直是 0，AniSkip 又可能先一步回来；拿这个 0 去判
+    /// 片头，会在起播前就 seek，随后播放头又被拉回 0（「进度还没出来就跳片头，
+    /// 然后从头播」）。所以首帧稳定前只记时间轴，不判区间、不自动跳。
+    var isPlaybackReady = false
+    /// 当前集后面还有没有下一集。末集在片尾贴结尾时不提示；片尾后还剩
+    /// >5 秒才提示「跳过片尾」，有下一集才换成「下一集」倒数。
     var hasNextEpisode = false
 
     private(set) var kind: SkipKind?
@@ -63,7 +72,7 @@ final class SkipSegmentPillModel {
     /// 弹窗现在有没有内容。
     var isVisible: Bool { kind != nil }
 
-    /// 符号中间要不要写秒数：片尾 3 秒内不倒数（`nextEpisode`），数字位就空着。
+    /// 符号中间要不要写秒数：片尾贴结尾（`nextEpisode`）不倒数，数字位就空着。
     var showsCountdownNumber: Bool { mode == .countdown }
 
     /// 圆环进度：0..1，1 是满环。
@@ -130,6 +139,12 @@ final class SkipSegmentPillModel {
         }
         // 真正无区间：清掉取消 / 跳过状态，让下一次的提示能回来。
         if segments.isEmpty { return }
+        // 加载阶段不判区间：这时 position 还是 0，分不清「真的在片头」还是
+        // 「还没起播」，提前 seek 会被加载完成后的播放头覆盖回 0。
+        guard isPlaybackReady else {
+            hide()
+            return
+        }
 
         if isScrubbing {
             hide()
@@ -146,7 +161,18 @@ final class SkipSegmentPillModel {
             return
         }
 
+        // 片尾结束到结尾 ≤5 秒、又没有下一集：这就是本集结尾，不弹任何提示。
+        if let kind, let range, suppressesEndingPrompt(kind, range) {
+            hide()
+            return
+        }
+
         if let kind, let range {
+            // 片长 / 下一集信息可能在弹窗已经浮出来之后才补齐：按最新判定
+            // 重算一次，别让「下一集」和「跳过片尾」停在旧结论上。
+            let expectedMode: Mode = endsEpisode(kind, range) ? .nextEpisode : .countdown
+            if mode != expectedMode { mode = expectedMode }
+
             // 倒数进行中：只在仍盯着同一片段时倒数。
             let active = segments.activeAt(position)
             if active?.range.isSame(range) != true {
@@ -188,6 +214,11 @@ final class SkipSegmentPillModel {
     }
 
     private func show(_ kind: SkipKind, _ range: SkipRange) {
+        // 没有下一集、片尾又贴着本集结尾：这段已经没什么可跳的，别弹窗。
+        guard !suppressesEndingPrompt(kind, range) else {
+            hide()
+            return
+        }
         self.kind = kind
         self.range = range
         mode = endsEpisode(kind, range) ? .nextEpisode : .countdown
@@ -223,6 +254,13 @@ final class SkipSegmentPillModel {
             && kind == .ending
             && duration > 0
             && duration - range.end <= Self.postCreditsThreshold
+    }
+
+    /// 片尾结束到结尾 ≤5 秒、却没有下一集：既没有「下一集」可切，也没有
+    /// 足够的片尾可跳，按需求整段不提示。>5 秒才走「即将跳过片尾」。
+    private func suppressesEndingPrompt(_ kind: SkipKind, _ range: SkipRange) -> Bool {
+        guard kind == .ending, duration > 0, !hasNextEpisode else { return false }
+        return duration - range.end <= Self.postCreditsThreshold
     }
 }
 
@@ -339,7 +377,7 @@ struct SkipSegmentPillView: View {
     /// 圆环，不显示数字（跟 main 的 `_CountdownRing` 一致）。
     /// 倒数：快进那颗符号，秒数写在符号正中（Colo 2026-10-28）。
     /// 以前是旁边一颗圆环，跟栏里的符号对不上；现在整颗就是符号本身。
-    /// 片尾 3 秒内不倒数，就把数字位空着。
+    /// 片尾贴结尾（`nextEpisode`）不倒数，就把数字位空着。
     private var countdownRing: some View {
         ZStack {
             Image(systemName: "goforward")
