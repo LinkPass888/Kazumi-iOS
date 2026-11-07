@@ -14234,7 +14234,8 @@
     "等本机起播后再试。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"等本機開始播放後再試。"}}}},
     "这个片源投不出去":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"這個片源無法投放"}}}},
     "换一个片源，或回到本机播放。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"更換片源，或回到本機播放。"}}}},
-    "已回到本机播放":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"已回到本機播放"}}}}
+    "已回到本机播放":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"已回到本機播放"}}}},
+    "去「全部」里安装一条规则。":{"localizations":{"zh-Hant":{"stringUnit":{"state":"translated","value":"到「全部」裡安裝一條規則。"}}}}
   },
   "version":"1.0"
 }

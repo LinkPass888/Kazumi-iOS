@@ -48,6 +48,7 @@ extension PluginHTTPItem {
 struct PluginShopView: View {
     @Environment(PluginsController.self) private var plugins
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var isLoading = false
     @State private var busyItems: Set<String> = []
@@ -73,65 +74,109 @@ struct PluginShopView: View {
         }
     }
 
-    var body: some View {
-        List {
-            Section {
-                controlBar
-                    .padding(.horizontal, 16)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            }
+    /// 空状态随当前 tab 变化：搜索无结果、目录为空、未安装、无更新各说各的。
+    private var emptyState: EmptyStateContent {
+        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return EmptyStateContent(
+                title: "没有找到规则",
+                systemImage: "magnifyingglass",
+                description: "换个关键词再试试。"
+            )
+        }
+        if plugins.pluginHTTPList.isEmpty {
+            return EmptyStateContent(
+                title: "规则目录为空",
+                systemImage: "shippingbox",
+                description: "下拉刷新重试。"
+            )
+        }
+        switch selectedFilter {
+        case .all:
+            return EmptyStateContent(
+                title: "规则目录为空",
+                systemImage: "shippingbox",
+                description: "下拉刷新重试。"
+            )
+        case .installed:
+            return EmptyStateContent(
+                title: "还没有安装规则",
+                systemImage: "tray",
+                description: "去「全部」里安装一条规则。"
+            )
+        case .update:
+            return EmptyStateContent(
+                title: "没有可更新的规则",
+                systemImage: "checkmark.circle",
+                description: "所有规则都是最新版本。"
+            )
+        }
+    }
 
-            if isLoading && plugins.pluginHTTPList.isEmpty {
-                Section {
-                    HStack {
-                        Spacer()
-                        ProgressView("正在获取规则目录…")
-                        Spacer()
+    private struct EmptyStateContent {
+        let title: LocalizedStringKey
+        let systemImage: String
+        let description: LocalizedStringKey
+    }
+
+    /// 跟大标题同一档左边距：iPhone 16，iPad 20。
+    private var pageMargin: CGFloat {
+        horizontalSizeClass == .compact ? 16 : 20
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            controlBar
+                .padding(.horizontal, pageMargin)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+
+            List {
+                if isLoading && plugins.pluginHTTPList.isEmpty {
+                    Section {
+                        HStack {
+                            Spacer()
+                            ProgressView("正在获取规则目录…")
+                            Spacer()
+                        }
+                        .padding(.vertical, 24)
                     }
-                    .padding(.vertical, 24)
-                }
-            } else if filteredItems.isEmpty {
-                Section {
-                    if plugins.pluginHTTPList.isEmpty {
+                } else if filteredItems.isEmpty {
+                    Section {
+                        let state = emptyState
                         ContentUnavailableView(
-                            "规则目录为空",
-                            systemImage: "shippingbox",
-                            description: Text("下拉刷新重试。")
-                        )
-                    } else {
-                        ContentUnavailableView(
-                            "没有找到规则",
-                            systemImage: query.isEmpty ? "line.3.horizontal.decrease.circle" : "magnifyingglass",
-                            description: Text("换个关键词再试试。")
+                            state.title,
+                            systemImage: state.systemImage,
+                            description: Text(state.description)
                         )
                     }
-                }
-            } else {
-                Section {
-                    ForEach(filteredItems) { item in
-                        PluginCatalogRow(
-                            item: item,
-                            status: plugins.pluginStatus(item),
-                            isBusy: busyItems.contains(item.id)
-                        ) {
-                            Task { await install(item) }
+                } else {
+                    Section {
+                        ForEach(filteredItems) { item in
+                            PluginCatalogRow(
+                                item: item,
+                                status: plugins.pluginStatus(item),
+                                isBusy: busyItems.contains(item.id)
+                            ) {
+                                Task { await install(item) }
+                            }
+                        }
+                    } footer: {
+                        if KazumiEndpoints.customPluginShop == nil {
+                            Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则，数据来自 KazumiRules 仓库。"))
+                        } else {
+                            Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则。"))
                         }
                     }
-                } footer: {
-                    if KazumiEndpoints.customPluginShop == nil {
-                        Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则，数据来自 KazumiRules 仓库。"))
-                    } else {
-                        Text(String(localized: "共 \(String(describing: filteredItems.count)) 条规则。"))
-                    }
                 }
             }
+            .contentMargins(.top, 0, for: .scrollContent)
+            .listSectionSpacing(.custom(0))
+            // 顶部滚动边缘：列表顶部用渐进模糊（.soft）。
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .refreshable { await refresh(force: true) }
         }
-        // 顶部滚动边缘：列表顶部用渐进模糊（.soft）。
-        .scrollEdgeEffectStyle(.soft, for: .top)
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
         .background(KazumiPalette.heroBackground(for: colorScheme).ignoresSafeArea())
         .navigationTitle("规则仓库")
         .navigationBarTitleDisplayMode(.large)
@@ -141,11 +186,11 @@ struct PluginShopView: View {
                     RulesRepositoryScreen()
                 } label: {
                     Image(systemName: "link.badge.plus")
+                        .foregroundStyle(Color.primary)
                 }
                 .accessibilityLabel("自定义规则仓库")
             }
         }
-        .refreshable { await refresh(force: true) }
         .overlay(alignment: .bottom) {
             if let toast {
                 Text(toast)
@@ -346,26 +391,35 @@ private struct PluginCatalogRow: View {
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
+                let titleLayout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                titleLayout {
                     Text(item.name)
                         .font(.headline)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                    if item.antiCrawlerEnabled {
-                        Label("验证", systemImage: "checkmark.shield")
-                            .labelStyle(.iconOnly)
+                        .layoutPriority(1)
+                    if !item.author.isEmpty {
+                        Text(item.author)
                             .font(.caption)
-                            .foregroundStyle(KazumiPalette.accent(for: colorScheme))
+                            .foregroundStyle(KazumiPalette.secondaryText(for: colorScheme))
+                            .lineLimit(1)
                     }
                 }
                 let metaLayout = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
                     : AnyLayout(HStackLayout(spacing: 12))
                 metaLayout {
-                    Text(item.author)
                     RuleMetadataLabel(text: item.version, systemImage: "tag")
                     if let updated = item.updatedDateText {
                         RuleMetadataLabel(text: updated, systemImage: "clock")
+                    }
+                    if item.antiCrawlerEnabled {
+                        RuleMetadataLabel(
+                            text: String(localized: "验证"),
+                            systemImage: "checkmark.shield"
+                        )
                     }
                 }
                 .font(.caption)
