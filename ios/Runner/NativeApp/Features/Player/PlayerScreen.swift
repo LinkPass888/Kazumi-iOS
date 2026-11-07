@@ -1159,7 +1159,7 @@ struct PlayerScreen: View {
                     // 顶条只往上多画 `maskTopOvershoot`：画在屏幕外，专门吃
                     // 「跟窗口顶差几个点」那种缝（LP 2026-10-28 反复报的）。
                     .background(alignment: .top) {
-                        topMask(fadeHeight: maskFades.top, emphasized: !isFullscreen)
+                        topMask(fadeHeight: maskFades.top)
                             .frame(width: maskWidth)
                             .offset(y: -Self.maskTopOvershoot)
                             .opacity(controlsShown ? 1 : 0)
@@ -1175,7 +1175,8 @@ struct PlayerScreen: View {
             }
             // 这一层几何本身要铺到窗口边：控制层（和它的遮罩）原来排在安全区里，
             // 遮罩就从安全区下沿起画、离窗口顶差那一点（LP 2026-10-28 反复报的）。
-            // 顶栏自己有 padding(.top, playerTopInset)，按钮不会顶到刘海下面。
+            // 顶栏自己有 padding(.top, playerTopInset)，按钮不会顶到刘海下面；
+            // 横屏用 landscapePlayerTopInset = 0，直接贴窗口顶。
             .ignoresSafeArea(.container, edges: isFullscreen ? [.top, .bottom] : [])
 
             // HUD 一律放在画面从上往下 1/4 处、水平居中（LP 2026-10-28 第 11 条 / Colo）：
@@ -1523,15 +1524,25 @@ struct PlayerScreen: View {
     }
 
 
-    /// 顶栏离画面上沿的距离（原 12，按「上移现在距离的一半」收到 6）。
+    /// 竖屏顶栏离画面上沿的距离（原 12，按「上移现在距离的一半」收到 6）。
     private static let playerTopInset: CGFloat = 6
+    /// 横屏再往上收一档：第一次只从 12 收到 6，视觉上看不出来；横屏没有刘海，
+    /// 直接贴到窗口顶（0），顶栏才真的上移。
+    private static let landscapePlayerTopInset: CGFloat = 0
     /// 竖屏底栏离画面下沿的距离（原 12，按「下移现在距离的一半」收到 6）。
     private static let portraitTransportBottomInset: CGFloat = 6
     /// 横屏进度条轨道在 44pt 触控区里下移的量：轨道原来居中，离下方按钮行
     /// 还有约 20pt；下移一半（10pt）让轨道靠近按钮行，触控区不动。
     private static let landscapeProgressDrop: CGFloat = 10
-    /// 横屏时间标签离轨道的间距（原 8，收到 4 让它更贴近进度条）。
-    private static let landscapeTimeLabelGap: CGFloat = 4
+    /// 横屏时间标签离轨道的间距：收到 0，再配合下移量让它贴着轨道。
+    private static let landscapeTimeLabelGap: CGFloat = 0
+    /// 横屏时间标签的下移量：轨道在 44pt 触控区里下移 10 后，顶部约在 30pt；
+    /// 标签高约 14pt，下移 28pt 后底边离轨道只剩约 2pt，视觉上就是贴着。
+    private static let landscapeTimeLabelDrop: CGFloat = 28
+    /// 竖屏底栏最高内容（进度时间）到底边的距离，底渐变按它收边。
+    private static let portraitBottomShadowContent: CGFloat = 36
+    /// 横屏底栏最高内容（进度时间）到底边的距离。
+    private static let landscapeBottomShadowContent: CGFloat = 90
 
     /// 顶条只往上多画这么多点：画在屏幕外，专门吃「跟窗口顶之间那几个点」的缝。
     private static let maskTopOvershoot: CGFloat = 16
@@ -1556,25 +1567,31 @@ struct PlayerScreen: View {
         isFullscreen: Bool
     ) -> (top: CGFloat, bottom: CGFloat) {
         guard videoHeight > 0 else { return (0, 0) }
-        // 栏高按代码里的实际值（@developer3 2026-10-28 4300）：顶栏 50（44 的钮
-        // ＋上移后的 6）；底栏横屏约 115（时间行＋进度条＋48 的钮行＋12），
-        // 竖屏 58（52＋下移后的 6）。
-        let topBar: CGFloat = 44 + Self.playerTopInset
-        let bottomBar: CGFloat = isFullscreen ? 115 : 52 + Self.portraitTransportBottomInset
+        // 栏高按代码里的实际值（@developer3 2026-10-28 4300）：顶栏横屏 44（贴窗口顶）、
+        // 竖屏 50（44 的钮＋6）；底栏横屏 118（时间行＋进度条＋48 的钮行＋12），
+        // 竖屏 52（HStack 的固定高度）。
+        let topBar: CGFloat = 44 + (isFullscreen ? Self.landscapePlayerTopInset : Self.playerTopInset)
+        let bottomBar: CGFloat = isFullscreen ? 118 : 52
         // 竖屏画面只有 16:9 那么高，原来按「栏高之外再分渐隐」算，会把顶条压到
         // 34 点——顶栏自己的 50 点都盖不满，纯白画面上白字就看不见了。
-        // 竖屏改成上下同高：至少盖住栏高，最多 72，中间仍留一段全透明画面。
-        // 顶栏上移、底栏下移各 6，竖屏两条渐隐也跟着收 6，别比栏多出一截。
+        // 竖屏顶条按画面高给到 64–72，底条只包住时间文字那一截，中间仍留透明画面。
         if !isFullscreen {
             let fade = max(
                 0,
                 min(72, min(max(64, videoHeight * 0.33), videoHeight * 0.45))
                     - Self.playerTopInset
             )
-            return (fade, fade)
+            // 顶栏仍有 50 点要压，底栏最高只有时间文字：底渐变别跟顶一样高，
+            // 否则会盖过时间文字上方很远。
+            return (fade, min(fade, Self.portraitBottomShadowContent + 6))
         }
         var top = max(0, min(96, videoHeight * 0.25) - Self.playerTopInset)
-        var bottom = min(200, videoHeight * 0.45)
+        // 底渐变只包住底栏里真正有字/有控件的那一段，再往上 6pt 收边。
+        // 原来的 45% 画面高会一直盖到时间上方很远，底栏像压在一整块黑上。
+        var bottom = min(
+            min(200, videoHeight * 0.45),
+            Self.landscapeBottomShadowContent + 6
+        )
         let available = videoHeight - topBar - bottomBar
         if available > 0, top + bottom > available {
             let scale = available / (top + bottom)
@@ -1585,23 +1602,15 @@ struct PlayerScreen: View {
     }
 
     /// 顶部压暗：最黑那一档贴在这块几何的顶边（横屏就是窗口顶），往下渐隐到全透明。
-    /// 竖屏用更「厚」的一组 stops：顶栏白字要压到栏底还有足够对比，不能像横屏
-    /// 那样 50% 就掉到 0.4；横屏维持原样，已经够清楚。
-    private func topMask(fadeHeight: CGFloat, emphasized: Bool = false) -> some View {
-        let stops: [Gradient.Stop] = emphasized
-            ? [
-                .init(color: .black.opacity(0.82), location: 0),
-                .init(color: .black.opacity(0.72), location: 0.62),
-                .init(color: .black.opacity(0.45), location: 0.86),
-                .init(color: .clear, location: 1)
-            ]
-            : [
+    /// 横竖屏用同一组 stops——竖屏原来那组在 0.62 处还有 0.72，几乎是一块实心黑，
+    /// 看不出渐隐；这里统一成横屏那组，靠下面那半段自然淡出。
+    private func topMask(fadeHeight: CGFloat) -> some View {
+        LinearGradient(
+            stops: [
                 .init(color: .black.opacity(0.8), location: 0),
                 .init(color: .black.opacity(0.4), location: 0.5),
                 .init(color: .clear, location: 1)
-            ]
-        return LinearGradient(
-            stops: stops,
+            ],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -2202,7 +2211,7 @@ struct PlayerScreen: View {
             .fixedSize()
         }
         .padding(.horizontal, 16)
-        .padding(.top, Self.playerTopInset)
+        .padding(.top, isFullscreen ? Self.landscapePlayerTopInset : Self.playerTopInset)
         .onAppear { isCasting = Self.hasExternalVideoRoute }
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
             isCasting = Self.hasExternalVideoRoute
@@ -3047,16 +3056,18 @@ struct PlayerScreen: View {
         .frame(height: 52)
     }
 
-    /// 横屏：时间文字在进度条上方（左 16、下 4），进度条左右各 16，
-    /// 再下面一行按钮（左右各 16）。按钮行按 Colo 3613 的精简版：手机横屏放不下十颗。
+    /// 横屏：时间文字贴着进度条上方（左 16、底边离轨道约 2pt），
+    /// 进度条左右各 16、在 44pt 触控区里下移 10，再下面一行按钮（左右各 16）。
+    /// 按钮行按 Colo 3613 的精简版：手机横屏放不下十颗。
     private func landscapeTransport(_ controller: PlayerController) -> some View {
         VStack(spacing: 0) {
             timeLabel
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 16)
                 .padding(.bottom, Self.landscapeTimeLabelGap)
-                // 时间跟轨道一起下移；再靠缩短间距贴近轨道。
-                .offset(y: Self.landscapeProgressDrop)
+                // 时间贴着轨道下移；标签压进 44pt 触控区，但不吃拖动。
+                .offset(y: Self.landscapeTimeLabelDrop)
+                .allowsHitTesting(false)
 
             scrubber(trackOffset: Self.landscapeProgressDrop)
                 .padding(.horizontal, 16)
