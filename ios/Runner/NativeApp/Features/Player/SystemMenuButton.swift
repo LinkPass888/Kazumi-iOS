@@ -41,8 +41,10 @@ struct SystemMenuButton: UIViewRepresentable {
     var tint: Color = .white
     var showsChevron: Bool = false
     var menuTint: Color = .primary
-    var symbolSize: CGFloat = 20
-    var symbolWeight: Font.Weight = .regular
+    var symbolSize: CGFloat = 18
+    var symbolWeight: Font.Weight = .medium
+    /// 实心块状符号在 UIKit 侧没法用 scaleEffect，按 1.5pt 缩一档。
+    var symbolOptical: PlayerIconOptical = .standard
     var onOpen: () -> Void = {}
     var capsule: Bool = false
 
@@ -79,7 +81,7 @@ struct SystemMenuButton: UIViewRepresentable {
         context: Context
     ) -> CGSize? {
         let intrinsic = uiView.intrinsicContentSize
-        let minimum: CGFloat = title == nil ? 44 : 0
+        let minimum: CGFloat = title == nil ? 40 : 0
         guard intrinsic.width > 0 || minimum > 0,
               intrinsic.height > 0 || minimum > 0
         else { return nil }
@@ -132,11 +134,13 @@ struct SystemMenuButton: UIViewRepresentable {
         coordinator.onOpen = onOpen
 
         let tintColor = Self.uiColor(tint)
+        let effectiveSymbolSize = symbolSize - (symbolOptical == .solid ? 1.5 : 0)
         let appearanceSignature = [
             title ?? "",
             symbol,
-            String(describing: symbolSize),
+            String(describing: effectiveSymbolSize),
             String(describing: symbolWeight),
+            String(describing: symbolOptical),
             String(showsChevron),
             String(capsule),
             String(describing: tintColor),
@@ -178,7 +182,7 @@ struct SystemMenuButton: UIViewRepresentable {
                     UIImage(
                         systemName: symbol,
                         withConfiguration: UIImage.SymbolConfiguration(
-                            pointSize: symbolSize,
+                            pointSize: effectiveSymbolSize,
                             weight: Self.uiWeight(symbolWeight)
                         )
                     ),
@@ -218,8 +222,8 @@ struct SystemMenuButton: UIViewRepresentable {
         return UIImage(
             systemName: item.symbol,
             withConfiguration: UIImage.SymbolConfiguration(
-                pointSize: item.symbolPointSize ?? 17,
-                weight: .regular
+                pointSize: item.symbolPointSize ?? 18,
+                weight: .medium
             )
         )
     }
