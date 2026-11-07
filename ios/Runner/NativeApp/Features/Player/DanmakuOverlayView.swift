@@ -36,22 +36,28 @@ final class DanmakuOverlayView: UIView {
                 return
             }
 
-            // 用同一份排版属性生成两条 CTLine：描边线只把字色改成黑色，
-            // 填充线保留弹幕原色。字体、字重、字距和段落完全一致，因此几何一致。
-            // 不再依赖 CGContext 的 fillColor；CoreText 对 run 自带颜色的处理会覆盖它。
-            let strokeString = NSMutableAttributedString(attributedString: attributedText)
-            strokeString.addAttribute(
+            // Apple 的 CoreText 示例要求：颜色完全从 CGContext 取时，字符串本身
+            // 不能再留 `.foregroundColor`。上一版同时保留两套颜色来源，导致 stroke / fill
+            // 各自走了不同的 run，视觉上又错成斜向叠字。
+            let fillColor = attributedText.attribute(
                 .foregroundColor,
-                value: UIColor.black,
-                range: NSRange(location: 0, length: strokeString.length)
+                at: 0,
+                effectiveRange: nil
+            ) as? UIColor ?? .white
+            let drawString = NSMutableAttributedString(attributedString: attributedText)
+            let fullRange = NSRange(location: 0, length: drawString.length)
+            drawString.removeAttribute(.foregroundColor, range: fullRange)
+            drawString.addAttribute(
+                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String),
+                value: true,
+                range: fullRange
             )
-            let strokeLine = CTLineCreateWithAttributedString(strokeString as CFAttributedString)
-            let fillLine = CTLineCreateWithAttributedString(attributedText as CFAttributedString)
+            let line = CTLineCreateWithAttributedString(drawString as CFAttributedString)
             var ascent: CGFloat = 0
             var descent: CGFloat = 0
             var leading: CGFloat = 0
             let lineWidth = CGFloat(
-                CTLineGetTypographicBounds(fillLine, &ascent, &descent, &leading)
+                CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
             )
             let lineHeight = ascent + descent + leading
             // 仿 canvas_danmaku 的两次 drawParagraph：相同排版、相同基线，
@@ -68,22 +74,17 @@ final class DanmakuOverlayView: UIView {
             context.setLineWidth(outlineWidth)
             context.setLineJoin(.round)
             context.setLineCap(.round)
-            context.setStrokeColor(UIColor.black.cgColor)
-            if let fillColor = attributedText.attribute(
-                .foregroundColor,
-                at: 0,
-                effectiveRange: nil
-            ) as? UIColor {
-                context.setFillColor(fillColor.cgColor)
-            }
-
-            // 两遍都复位文字位置，避免 CTLineDraw 改动 text matrix 后第二遍跑出标签外。
+            // 两遍必须用同一条 CTLine 和同一个 origin；第一遍仅画黑色轮廓，
+            // 第二遍在完全相同的位置盖回弹幕原色。
             context.setTextDrawingMode(.stroke)
+            context.setStrokeColor(UIColor.black.cgColor)
             context.textPosition = textOrigin
-            CTLineDraw(strokeLine, context)
+            CTLineDraw(line, context)
+
             context.setTextDrawingMode(.fill)
+            context.setFillColor(fillColor.cgColor)
             context.textPosition = textOrigin
-            CTLineDraw(fillLine, context)
+            CTLineDraw(line, context)
             context.restoreGState()
         }
     }
