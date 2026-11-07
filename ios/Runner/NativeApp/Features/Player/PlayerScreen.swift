@@ -3232,8 +3232,7 @@ struct PlayerScreen: View {
             .foregroundStyle(.white)
             .tint(.white)
             .focused($danmakuFieldFocused)
-            // 回车保持「发送」这个明确动作；取消入口另议，不要用回车符号
-            // 承载一个看不出来的「取消」行为。
+            // 回车恢复成「发送」；取消由右边那颗按钮在键盘弹起时承担。
             .submitLabel(.send)
             .onSubmit { sendDanmaku() }
             .disabled(!danmakuEnabled)
@@ -3257,12 +3256,22 @@ struct PlayerScreen: View {
                 }
             }
 
+            // 键盘弹起时这颗按钮变成「取消」：只收键盘、不动已输入的文字；
+            // 收起后回到「发送」。回车仍然是发送，行为不藏。
             Button {
-                sendDanmaku()
+                if danmakuFieldFocused {
+                    endDanmakuInput()
+                } else {
+                    sendDanmaku()
+                }
             } label: {
-                Text("发送")
+                Text(danmakuFieldFocused ? String(localized: "取消") : String(localized: "发送"))
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(canSendDanmaku ? .white : .white.opacity(0.55))
+                    .foregroundStyle(
+                        danmakuFieldFocused || canSendDanmaku
+                            ? .white
+                            : .white.opacity(0.55)
+                    )
                     .padding(.horizontal, 12)
                     .frame(maxHeight: .infinity)
                     .background {
@@ -3278,8 +3287,8 @@ struct PlayerScreen: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(PlayerPressStyle())
-            .disabled(!canSendDanmaku)
-            .accessibilityLabel("发送弹幕")
+            .disabled(!danmakuFieldFocused && !canSendDanmaku)
+            .accessibilityLabel(danmakuFieldFocused ? String(localized: "取消") : String(localized: "发送弹幕"))
         }
         .frame(height: 33)
         .background(.white.opacity(danmakuEnabled ? 0.38 : 0.18),
@@ -3288,6 +3297,13 @@ struct PlayerScreen: View {
 
     private var canSendDanmaku: Bool {
         danmakuEnabled && !danmakuDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 只收起键盘，不清草稿——键盘弹起时那颗「取消」的语义。
+    private func endDanmakuInput() {
+        danmakuFieldFocused = false
+        noteInteraction()
+        showControlsBriefly()
     }
 
     /// 发出去：只在本地画布上补一条（原版 `_sendDanmaku` 也不调接口），清空、收键盘。
